@@ -1,4 +1,4 @@
-const { makeWorksectionRequest } = require('../test-worksection');
+const { makeWorksectionRequest } = require('./worksection-api');
 const { getAllProjects, getProjectsWithExternalId, createProject, updateProject, findUserByName, findUserByEmail, getAllStages, createStage, updateStage, findStageByExternalId, getAllObjects, createObject, updateObject, findObjectByExternalId, deleteObject, getAllSections, createSection, updateSection, findSectionByExternalId, deleteSection } = require('./supabase-client');
 
 /**

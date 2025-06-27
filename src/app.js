@@ -4,7 +4,6 @@ const cors = require('cors');
 require('dotenv').config({ path: path.join(__dirname, '../ws.env') });
 
 // Импорт модулей синхронизации
-const { makeWorksectionRequest } = require('../test-worksection');
 const { 
     getProjectsWithSyncTag, 
     getProjectTags, 
@@ -107,7 +106,7 @@ class WSToWorkApp {
             try {
                 console.log('📁 Получение списка проектов из Worksection...');
 
-                const { makeWorksectionRequest } = require('../test-worksection');
+                const { makeWorksectionRequest } = require('../functions/worksection-api');
                 const response = await makeWorksectionRequest('get_projects');
                 
                 if (response.statusCode === 200 && response.data.status === 'ok') {
@@ -326,6 +325,7 @@ class WSToWorkApp {
     }
 
     async syncProjects(params = {}) {
+        const { makeWorksectionRequest } = require('../functions/worksection-api');
         const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         
         console.log('📊 Получение проектов из Worksection...');
