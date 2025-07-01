@@ -198,10 +198,10 @@ class WSToWorkApp {
                 
                 res.json({
                     success: true,
-                    data: supabaseProjects,
-                    total: supabaseProjects.length,
-                    totalInSupabase: allSupabaseProjects.length,
-                    withoutExternalId: allSupabaseProjects.length - supabaseProjects.length,
+                    projects_with_external_id: supabaseProjects,
+                    total_projects: allSupabaseProjects.length,
+                    external_projects: supabaseProjects.length,
+                    local_projects: allSupabaseProjects.length - supabaseProjects.length,
                     message: `Найдено ${supabaseProjects.length} проектов с external_id из ${allSupabaseProjects.length} общих`
                 });
                 
