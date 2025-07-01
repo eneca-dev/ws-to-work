@@ -230,11 +230,12 @@
             log('🏢 Запуск синхронизации проектов...', 'info');
             
             try {
-                const response = await fetch('/api/projects/sync');
+                const response = await fetch('/api/projects/sync-auto', { method: 'POST' });
                 const data = await response.json();
                 
                 if (data.success) {
-                    log(`✅ Проекты синхронизированы: ${data.created || 0} создано, ${data.updated || 0} обновлено`, 'success');
+                    const summary = data.summary || {};
+                    log(`✅ Проекты синхронизированы: найдено ${summary.found || 0}, создано ${summary.created || 0}, ошибок ${summary.errors || 0}`, 'success');
                 } else {
                     log(`❌ Ошибка синхронизации проектов: ${data.error}`, 'error');
                 }

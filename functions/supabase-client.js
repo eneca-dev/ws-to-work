@@ -541,6 +541,83 @@ async function findUserByEmail(email) {
     }
 }
 
+/**
+ * Получает всех менеджеров из Supabase
+ */
+async function getAllManagers() {
+    try {
+        console.log('👔 Получение всех менеджеров из Supabase...');
+        
+        const managers = await makeSupabaseRequest('managers?select=*&order=manager_name.asc');
+        
+        console.log(`👔 Получено ${managers.length} менеджеров из Supabase`);
+        return managers;
+        
+    } catch (error) {
+        console.error('❌ Ошибка получения менеджеров:', error.message);
+        throw error;
+    }
+}
+
+/**
+ * Создает нового менеджера в Supabase
+ */
+async function createManager(managerData) {
+    try {
+        console.log(`📝 Создание менеджера в Supabase: ${managerData.manager_name}`);
+        
+        const newManager = await makeSupabaseRequest('managers', {
+            method: 'POST',
+            body: JSON.stringify(managerData)
+        });
+        
+        console.log(`✅ Менеджер создан в Supabase с ID: ${newManager[0].manager_id}`);
+        return newManager[0];
+        
+    } catch (error) {
+        console.error('❌ Ошибка создания менеджера:', error.message);
+        throw error;
+    }
+}
+
+/**
+ * Обновляет менеджера в Supabase
+ */
+async function updateManager(managerId, updateData) {
+    try {
+        console.log(`📝 Обновление менеджера в Supabase: ID ${managerId}`);
+        
+        const updatedManager = await makeSupabaseRequest(`managers?manager_id=eq.${managerId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(updateData)
+        });
+        
+        console.log(`✅ Менеджер обновлен в Supabase`);
+        return updatedManager[0];
+        
+    } catch (error) {
+        console.error('❌ Ошибка обновления менеджера:', error.message);
+        throw error;
+    }
+}
+
+/**
+ * Находит менеджера по external_id
+ */
+async function findManagerByExternalId(externalId) {
+    try {
+        const managers = await makeSupabaseRequest(`managers?external_id=eq.${externalId}&select=*`);
+        
+        if (managers.length > 0) {
+            return managers[0];
+        }
+        return null;
+    } catch (error) {
+        console.error(`❌ Ошибка при поиске менеджера по external_id ${externalId}:`, error.message);
+        return null;
+    }
+}
+
 module.exports = {
     makeSupabaseRequest,
     getAllProjects,
@@ -550,6 +627,10 @@ module.exports = {
     getAllUsers,
     findUserByName,
     findUserByEmail,
+    getAllManagers,
+    createManager,
+    updateManager,
+    findManagerByExternalId,
     getAllStages,
     createStage,
     updateStage,

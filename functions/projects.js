@@ -1,5 +1,5 @@
 const { makeWorksectionRequest } = require('./worksection-api');
-const { getAllProjects, getProjectsWithExternalId, createProject, updateProject, findUserByName, findUserByEmail, getAllStages, createStage, updateStage, findStageByExternalId, getAllObjects, createObject, updateObject, findObjectByExternalId, deleteObject, getAllSections, createSection, updateSection, findSectionByExternalId, deleteSection } = require('./supabase-client');
+const { getAllProjects, getProjectsWithExternalId, createProject, updateProject, findUserByName, findUserByEmail, getAllManagers, createManager, updateManager, findManagerByExternalId, getAllStages, createStage, updateStage, findStageByExternalId, getAllObjects, createObject, updateObject, findObjectByExternalId, deleteObject, getAllSections, createSection, updateSection, findSectionByExternalId, deleteSection } = require('./supabase-client');
 
 /**
  * Получает все проекты из Worksection с меткой "eneca.work sync"
@@ -95,11 +95,13 @@ async function getProjectsWithSyncTag() {
                     console.log(`👤 Менеджер проекта (fallback): ${managerName} (${managerEmail})`);
                 }
                 
-                // Добавляем проект с информацией о менеджере
+                // Добавляем проект с информацией о менеджере и компании
                 syncProjects.push({
                     ...project,
                     manager_name: managerName,
-                    manager_email: managerEmail
+                    manager_email: managerEmail,
+                    company: project.company || project.name, // Используем company или название проекта как fallback
+                    company_id: project.company_id || project.id // Используем company_id или id проекта как fallback
                 });
                 
                 if (managerName) {
@@ -457,33 +459,74 @@ async function getSupabaseProjectsWithExternalId() {
 
 /**
  * Создает новый проект в Supabase на основе данных из Worksection
+ * Согласно маппингу: Worksection Project → Manager + Project
  */
 async function createProjectInSupabase(wsProject) {
     console.log(`📝 Создание проекта в Supabase: ${wsProject.name}`);
     
+    let managerId = null;
+    
+    // 1. Создаем или находим Manager'а на основе компании проекта
+    if (wsProject.company) {
+        console.log(`🏢 Обрабатываем компанию проекта: ${wsProject.company}`);
+        
+        // Ищем существующего менеджера по external_id (ID компании)
+        const existingManager = await findManagerByExternalId(wsProject.company_id?.toString() || 'company_' + wsProject.id);
+        
+        if (existingManager) {
+            console.log(`✅ Найден существующий менеджер: ${existingManager.manager_name} (ID: ${existingManager.manager_id})`);
+            managerId = existingManager.manager_id;
+        } else {
+            // Создаем нового менеджера
+            console.log(`➕ Создаем нового менеджера для компании: ${wsProject.company}`);
+            
+            const managerData = {
+                manager_name: wsProject.company,
+                manager_description: `Менеджер проектов компании "${wsProject.company}". Импортировано из Worksection.`,
+                external_id: wsProject.company_id?.toString() || 'company_' + wsProject.id,
+                external_source: 'worksection',
+                external_updated_at: new Date().toISOString()
+            };
+            
+            const newManager = await createManager(managerData);
+            managerId = newManager.manager_id;
+            console.log(`✅ Создан новый менеджер: ${newManager.manager_name} (ID: ${newManager.manager_id})`);
+        }
+    } else {
+        console.log(`⚠️ У проекта "${wsProject.name}" не указана компания`);
+    }
+    
+    // 2. Создаем проект с привязкой к менеджеру
     const projectData = {
         project_name: wsProject.name,
         project_description: `Импортировано из Worksection. ${wsProject.description || ''}`.trim(),
+        manager_id: managerId, // Привязываем к Manager'у
         external_id: wsProject.id.toString(),
         external_source: 'worksection',
         external_updated_at: new Date().toISOString(),
         project_status: mapWorksectionStatus(wsProject.status),
     };
     
-    // Ищем и назначаем менеджера проекта
+    // 3. Ищем и назначаем ответственного за проект (project_manager)
     if (wsProject.manager_name) {
-        console.log(`👤 Ищем менеджера для нового проекта: ${wsProject.manager_name}`);
-        const foundManager = await findUserByName(wsProject.manager_name, wsProject.manager_email);
-        if (foundManager) {
-            projectData.manager_id = foundManager.user_id;
-            console.log(`✅ Назначен менеджер: ${foundManager.full_name} (ID: ${foundManager.user_id})`);
+        console.log(`👤 Ищем ответственного за проект: ${wsProject.manager_name}`);
+        const foundUser = await findUserByName(wsProject.manager_name, wsProject.manager_email);
+        if (foundUser) {
+            projectData.project_manager = foundUser.user_id;
+            console.log(`✅ Назначен ответственный: ${foundUser.full_name} (ID: ${foundUser.user_id})`);
         } else {
-            console.log(`⚠️ Менеджер не найден в базе: ${wsProject.manager_name}`);
+            console.log(`⚠️ Ответственный не найден в базе: ${wsProject.manager_name}`);
         }
     }
     
-    // Используем реальный запрос к Supabase API
+    // 4. Создаем проект в Supabase
     const newProject = await createProject(projectData);
+    
+    console.log(`✅ Проект создан: ${newProject.project_name} (ID: ${newProject.project_id})`);
+    if (managerId) {
+        console.log(`🔗 Проект привязан к менеджеру ID: ${managerId}`);
+    }
+    
     return newProject;
 }
 
