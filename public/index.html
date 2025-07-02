@@ -165,6 +165,17 @@
         </div>
         
         <div class="debug-section">
+            <h3>🏥 Диагностика и обслуживание</h3>
+            <div class="buttons">
+                <button onclick="checkSyncHealth()">🩺 Проверить здоровье системы</button>
+                <button onclick="validateHierarchy()">🔍 Проверить целостность данных</button>
+                <button onclick="getSystemReport()">📈 Отчёт о состоянии системы</button>
+                <button onclick="cleanupOrphaned()">🧹 Очистить orphaned записи</button>
+            </div>
+            <div class="debug-info" id="diagnosticInfo"></div>
+        </div>
+        
+        <div class="debug-section">
             <h3>🔍 Отладочная информация</h3>
             <div class="buttons">
                 <button onclick="checkSyncProjects()">📋 Получить проекты с sync тегом</button>
@@ -806,6 +817,270 @@
             }
             
             debugInfo.innerHTML = html;
+        }
+
+        // Новые диагностические функции
+        async function checkSyncHealth() {
+            if (isLoading) return;
+            setLoading(true);
+            log('🩺 Проверяем здоровье системы синхронизации...');
+
+            try {
+                const response = await fetch('/api/health/sync-status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    log(`✅ Проверка здоровья завершена. Общий статус: ${data.overall_health}`, 'success');
+                    displayHealthInfo(data);
+                } else {
+                    log(`❌ Ошибка проверки здоровья: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Ошибка проверки здоровья: ${error.message}`, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function validateHierarchy() {
+            if (isLoading) return;
+            setLoading(true);
+            log('🔍 Проверяем целостность иерархии данных...');
+
+            try {
+                const response = await fetch('/api/validate/hierarchy');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const issuesCount = data.issues ? data.issues.length : 0;
+                    if (issuesCount === 0) {
+                        log('✅ Целостность данных в порядке', 'success');
+                    } else {
+                        log(`⚠️ Найдено ${issuesCount} проблем целостности`, 'warning');
+                    }
+                    displayValidationInfo(data);
+                } else {
+                    log(`❌ Ошибка проверки целостности: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Ошибка проверки целостности: ${error.message}`, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function getSystemReport() {
+            if (isLoading) return;
+            setLoading(true);
+            log('📈 Генерируем отчёт о состоянии системы...');
+
+            try {
+                const response = await fetch('/api/report/system-status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    log(`✅ Отчёт сгенерирован за ${data.generation_time_ms}мс`, 'success');
+                    displaySystemReport(data);
+                } else {
+                    log(`❌ Ошибка генерации отчёта: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Ошибка генерации отчёта: ${error.message}`, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function cleanupOrphaned() {
+            if (isLoading) return;
+            
+            const confirmed = confirm('Запустить очистку orphaned записей в пробном режиме? (фактического удаления не будет)');
+            if (!confirmed) return;
+            
+            setLoading(true);
+            log('🧹 Запускаем очистку orphaned записей (пробный режим)...');
+
+            try {
+                const response = await fetch('/api/maintenance/cleanup-orphaned', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dryRun: true })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    const wouldDelete = data.would_delete;
+                    const total = wouldDelete.stages + wouldDelete.objects + wouldDelete.sections;
+                    log(`✅ Пробная очистка завершена. Будет удалено: ${total} записей`, 'success');
+                    displayCleanupInfo(data);
+                } else {
+                    log(`❌ Ошибка очистки: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ Ошибка очистки: ${error.message}`, 'error');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        // Функции отображения диагностической информации
+        function displayHealthInfo(data) {
+            const diagnosticInfo = document.getElementById('diagnosticInfo');
+            
+            const statusColors = {
+                healthy: '#28a745',
+                warning: '#ffc107',
+                unhealthy: '#fd7e14',
+                critical: '#dc3545'
+            };
+            
+            const statusEmojis = {
+                healthy: '✅',
+                warning: '⚠️',
+                unhealthy: '🔶',
+                critical: '❌'
+            };
+
+            let html = `<h4>🩺 Результаты проверки здоровья системы</h4>`;
+            
+            html += `
+                <div style="background: ${data.overall_health === 'healthy' ? '#d4edda' : '#f8d7da'}; 
+                            border: 1px solid ${statusColors[data.overall_health]}; 
+                            padding: 15px; margin: 10px 0; border-radius: 6px;">
+                    ${statusEmojis[data.overall_health]} <strong>Общий статус: ${data.overall_health.toUpperCase()}</strong><br>
+                    📊 Проверок: ${data.summary.total_checks}, 
+                    ✅ Здоровых: ${data.summary.healthy}, 
+                    ⚠️ Предупреждений: ${data.summary.warnings}, 
+                    ❌ Критических: ${data.summary.critical}
+                </div>
+            `;
+
+            html += `<h5>Детальные проверки:</h5>`;
+            data.checks.forEach(check => {
+                html += `
+                    <div style="border-left: 4px solid ${statusColors[check.status]}; 
+                                padding: 10px; margin: 10px 0; background: #f8f9fa;">
+                        ${statusEmojis[check.status]} <strong>${check.name}</strong><br>
+                        ${check.message}
+                    </div>
+                `;
+            });
+
+            diagnosticInfo.innerHTML = html;
+        }
+
+        function displayValidationInfo(data) {
+            const diagnosticInfo = document.getElementById('diagnosticInfo');
+            
+            let html = `<h4>🔍 Результаты проверки целостности данных</h4>`;
+            
+            if (data.issues.length === 0) {
+                html += `
+                    <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 15px; margin: 10px 0; border-radius: 6px;">
+                        ✅ <strong>Все проверки целостности прошли успешно!</strong><br>
+                        Orphaned записи не найдены, дубликаты external_id отсутствуют.
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; margin: 10px 0; border-radius: 6px;">
+                        ⚠️ <strong>Найдено ${data.issues.length} проблем целостности:</strong><br>
+                        ${data.issues.map(issue => `• ${issue}`).join('<br>')}
+                    </div>
+                `;
+            }
+
+            html += `
+                <div style="background: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 6px;">
+                    <strong>📊 Статистика данных:</strong><br>
+                    🏢 Проекты: ${data.statistics.projects}<br>
+                    🎯 Стадии: ${data.statistics.stages} (orphaned: ${data.statistics.orphaned_stages})<br>
+                    📦 Объекты: ${data.statistics.objects} (orphaned: ${data.statistics.orphaned_objects})<br>
+                    📑 Разделы: ${data.statistics.sections} (orphaned: ${data.statistics.orphaned_sections})<br>
+                    🔗 Дубликаты external_id: ${data.statistics.duplicate_external_ids}
+                </div>
+            `;
+
+            diagnosticInfo.innerHTML = html;
+        }
+
+        function displaySystemReport(data) {
+            const diagnosticInfo = document.getElementById('diagnosticInfo');
+            
+            let html = `<h4>📈 Отчёт о состоянии системы</h4>`;
+            
+            const healthScore = data.summary.health_score;
+            const healthColor = healthScore >= 80 ? '#28a745' : healthScore >= 60 ? '#ffc107' : '#dc3545';
+            const healthEmoji = healthScore >= 80 ? '🟢' : healthScore >= 60 ? '🟡' : '🔴';
+
+            html += `
+                <div style="background: linear-gradient(135deg, ${healthColor}15, ${healthColor}05); 
+                            border: 1px solid ${healthColor}; padding: 15px; margin: 10px 0; border-radius: 6px;">
+                    ${healthEmoji} <strong>Индекс здоровья системы: ${healthScore}/100</strong><br>
+                    📊 Всего сущностей: ${data.summary.total_entities}<br>
+                    🎯 Уровней иерархии: ${data.summary.hierarchy_levels}<br>
+                    ⚡ Производительность: ${data.summary.performance || 0} операций/сек
+                </div>
+            `;
+
+            html += `<h5>📊 Покрытие синхронизацией:</h5>`;
+            const coverage = data.summary.sync_coverage;
+            Object.entries(coverage).forEach(([entity, percent]) => {
+                const emoji = percent === 100 ? '🟢' : percent >= 50 ? '🟡' : '🔴';
+                html += `
+                    <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
+                        <span>${emoji} ${entity.charAt(0).toUpperCase() + entity.slice(1)}</span>
+                        <span><strong>${percent}%</strong></span>
+                    </div>
+                `;
+            });
+
+            if (data.recommendations && data.recommendations.length > 0) {
+                html += `<h5>💡 Рекомендации:</h5>`;
+                data.recommendations.forEach((rec, index) => {
+                    const priorityEmoji = rec.priority === 'high' ? '🔴' : rec.priority === 'medium' ? '🟡' : '🟢';
+                    html += `
+                        <div style="border-left: 3px solid ${rec.priority === 'high' ? '#dc3545' : rec.priority === 'medium' ? '#ffc107' : '#28a745'}; 
+                                    padding: 10px; margin: 5px 0; background: #f8f9fa;">
+                            ${priorityEmoji} <strong>${rec.message}</strong><br>
+                            <small>💡 ${rec.action}</small>
+                        </div>
+                    `;
+                });
+            }
+
+            diagnosticInfo.innerHTML = html;
+        }
+
+        function displayCleanupInfo(data) {
+            const diagnosticInfo = document.getElementById('diagnosticInfo');
+            
+            let html = `<h4>🧹 Результаты очистки orphaned записей</h4>`;
+            
+            if (data.dry_run) {
+                const wouldDelete = data.would_delete;
+                const total = wouldDelete.stages + wouldDelete.objects + wouldDelete.sections;
+                
+                if (total === 0) {
+                    html += `
+                        <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 15px; margin: 10px 0; border-radius: 6px;">
+                            ✅ <strong>Orphaned записи не найдены!</strong><br>
+                            Система находится в чистом состоянии.
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; margin: 10px 0; border-radius: 6px;">
+                            ⚠️ <strong>Найдено ${total} orphaned записей для очистки:</strong><br>
+                            🎯 Стадии: ${wouldDelete.stages}<br>
+                            📦 Объекты: ${wouldDelete.objects}<br>
+                            📑 Разделы: ${wouldDelete.sections}
+                        </div>
+                    `;
+                }
+            }
+
+            diagnosticInfo.innerHTML = html;
         }
 
         // Автоматическая проверка статуса при загрузке

@@ -322,11 +322,18 @@ async function updateStage(stageId, updateData) {
 }
 
 /**
- * Находит стадию по external_id
+ * Находит стадию по external_id и project_id
  */
-async function findStageByExternalId(externalId) {
+async function findStageByExternalId(externalId, projectId = null) {
     try {
-        const stages = await makeSupabaseRequest(`stages?external_id=eq.${externalId}&select=*`);
+        let query = `stages?external_id=eq.${externalId}&select=*`;
+        
+        // Если указан projectId, ищем стадию в конкретном проекте
+        if (projectId) {
+            query = `stages?external_id=eq.${externalId}&stage_project_id=eq.${projectId}&select=*`;
+        }
+        
+        const stages = await makeSupabaseRequest(query);
         
         if (stages.length > 0) {
             return stages[0];
@@ -396,11 +403,18 @@ async function updateObject(objectId, updateData) {
 }
 
 /**
- * Находит объект по external_id
+ * Находит объект по external_id и project_id
  */
-async function findObjectByExternalId(externalId) {
+async function findObjectByExternalId(externalId, projectId = null) {
     try {
-        const objects = await makeSupabaseRequest(`objects?external_id=eq.${externalId}&select=*`);
+        let query = `objects?external_id=eq.${externalId}&select=*`;
+        
+        // Если указан projectId, ищем объект в конкретном проекте
+        if (projectId) {
+            query = `objects?external_id=eq.${externalId}&object_project_id=eq.${projectId}&select=*`;
+        }
+        
+        const objects = await makeSupabaseRequest(query);
         
         if (objects.length > 0) {
             return objects[0];
@@ -489,11 +503,18 @@ async function updateSection(sectionId, updateData) {
 }
 
 /**
- * Находит раздел по external_id
+ * Находит раздел по external_id и project_id
  */
-async function findSectionByExternalId(externalId) {
+async function findSectionByExternalId(externalId, projectId = null) {
     try {
-        const sections = await makeSupabaseRequest(`sections?external_id=eq.${externalId}&select=*`);
+        let query = `sections?external_id=eq.${externalId}&select=*`;
+        
+        // Если указан projectId, ищем раздел в конкретном проекте
+        if (projectId) {
+            query = `sections?external_id=eq.${externalId}&section_project_id=eq.${projectId}&select=*`;
+        }
+        
+        const sections = await makeSupabaseRequest(query);
         
         if (sections.length > 0) {
             return sections[0];
@@ -541,82 +562,7 @@ async function findUserByEmail(email) {
     }
 }
 
-/**
- * Получает всех менеджеров из Supabase
- */
-async function getAllManagers() {
-    try {
-        console.log('👔 Получение всех менеджеров из Supabase...');
-        
-        const managers = await makeSupabaseRequest('managers?select=*&order=manager_name.asc');
-        
-        console.log(`👔 Получено ${managers.length} менеджеров из Supabase`);
-        return managers;
-        
-    } catch (error) {
-        console.error('❌ Ошибка получения менеджеров:', error.message);
-        throw error;
-    }
-}
 
-/**
- * Создает нового менеджера в Supabase
- */
-async function createManager(managerData) {
-    try {
-        console.log(`📝 Создание менеджера в Supabase: ${managerData.manager_name}`);
-        
-        const newManager = await makeSupabaseRequest('managers', {
-            method: 'POST',
-            body: JSON.stringify(managerData)
-        });
-        
-        console.log(`✅ Менеджер создан в Supabase с ID: ${newManager[0].manager_id}`);
-        return newManager[0];
-        
-    } catch (error) {
-        console.error('❌ Ошибка создания менеджера:', error.message);
-        throw error;
-    }
-}
-
-/**
- * Обновляет менеджера в Supabase
- */
-async function updateManager(managerId, updateData) {
-    try {
-        console.log(`📝 Обновление менеджера в Supabase: ID ${managerId}`);
-        
-        const updatedManager = await makeSupabaseRequest(`managers?manager_id=eq.${managerId}`, {
-            method: 'PATCH',
-            body: JSON.stringify(updateData)
-        });
-        
-        console.log(`✅ Менеджер обновлен в Supabase`);
-        return updatedManager[0];
-        
-    } catch (error) {
-        console.error('❌ Ошибка обновления менеджера:', error.message);
-        throw error;
-    }
-}
-
-/**
- * Находит менеджера по external_id
- */
-async function findManagerByExternalId(externalId) {
-    try {
-        const managers = await makeSupabaseRequest(`managers?external_id=eq.${externalId}&select=*`);
-        
-        if (managers.length > 0) {
-            return managers[0];
-        }
-        return null;
-    } catch (error) {
-        console.error(`❌ Ошибка при поиске менеджера по external_id ${externalId}:`, error.message);
-        return null;
-    }
-}
 
 module.exports = {
     makeSupabaseRequest,
@@ -627,10 +573,6 @@ module.exports = {
     getAllUsers,
     findUserByName,
     findUserByEmail,
-    getAllManagers,
-    createManager,
-    updateManager,
-    findManagerByExternalId,
     getAllStages,
     createStage,
     updateStage,

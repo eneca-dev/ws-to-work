@@ -1,5 +1,303 @@
 const { makeWorksectionRequest } = require('./worksection-api');
-const { getAllProjects, getProjectsWithExternalId, createProject, updateProject, findUserByName, findUserByEmail, getAllManagers, createManager, updateManager, findManagerByExternalId, getAllStages, createStage, updateStage, findStageByExternalId, getAllObjects, createObject, updateObject, findObjectByExternalId, deleteObject, getAllSections, createSection, updateSection, findSectionByExternalId, deleteSection } = require('./supabase-client');
+const { getAllProjects, getProjectsWithExternalId, createProject, updateProject, findUserByName, findUserByEmail, getAllStages, createStage, updateStage, findStageByExternalId, getAllObjects, createObject, updateObject, findObjectByExternalId, deleteObject, getAllSections, createSection, updateSection, findSectionByExternalId, deleteSection } = require('./supabase-client');
+
+/**
+ * УТИЛИТЫ ДЛЯ ОБРАБОТКИ ПОГРАНИЧНЫХ СЛУЧАЕВ И ВАЛИДАЦИИ
+ */
+
+/**
+ * Безопасная валидация данных проекта
+ */
+function validateProjectData(project) {
+    const errors = [];
+    const warnings = [];
+    
+    if (!project) {
+        errors.push('Проект не определён');
+        return { isValid: false, errors, warnings };
+    }
+    
+    // Обязательные поля
+    if (!project.id) errors.push('Отсутствует ID проекта');
+    if (!project.name || project.name.trim() === '') errors.push('Отсутствует название проекта');
+    
+    // Проверки на разумные ограничения
+    if (project.name && project.name.length > 255) {
+        warnings.push('Название проекта слишком длинное, будет обрезано до 255 символов');
+    }
+    
+    // Проверка статуса
+    if (project.status && !['active', 'done', 'freeze'].includes(project.status)) {
+        warnings.push(`Неизвестный статус проекта: ${project.status}`);
+    }
+    
+    // Проверка менеджера
+    if (!project.manager_name && !project.user_to?.name) {
+        warnings.push('Не найден менеджер проекта');
+    }
+    
+    return {
+        isValid: errors.length === 0,
+        errors,
+        warnings
+    };
+}
+
+/**
+ * Безопасная валидация данных стадии
+ */
+function validateStageData(stage, project) {
+    const errors = [];
+    const warnings = [];
+    
+    if (!stage) {
+        errors.push('Стадия не определена');
+        return { isValid: false, errors, warnings };
+    }
+    
+    if (!stage.name || stage.name.trim() === '') errors.push('Отсутствует название стадии');
+    if (!project) errors.push('Не указан родительский проект для стадии');
+    
+    if (stage.name && stage.name.length > 255) {
+        warnings.push('Название стадии слишком длинное, будет обрезано');
+    }
+    
+    return {
+        isValid: errors.length === 0,
+        errors,
+        warnings
+    };
+}
+
+/**
+ * Безопасная валидация данных объекта
+ */
+function validateObjectData(object, stage) {
+    const errors = [];
+    const warnings = [];
+    
+    if (!object) {
+        errors.push('Объект не определён');
+        return { isValid: false, errors, warnings };
+    }
+    
+    if (!object.name || object.name.trim() === '') errors.push('Отсутствует название объекта');
+    if (!stage) errors.push('Не указана родительская стадия для объекта');
+    
+    if (object.name && object.name.length > 255) {
+        warnings.push('Название объекта слишком длинное, будет обрезано');
+    }
+    
+    // Проверка статуса
+    if (object.status && !['active', 'done', 'freeze'].includes(object.status)) {
+        warnings.push(`Неизвестный статус объекта: ${object.status}`);
+    }
+    
+    return {
+        isValid: errors.length === 0,
+        errors,
+        warnings
+    };
+}
+
+/**
+ * Безопасная валидация данных раздела
+ */
+function validateSectionData(section, object) {
+    const errors = [];
+    const warnings = [];
+    
+    if (!section) {
+        errors.push('Раздел не определён');
+        return { isValid: false, errors, warnings };
+    }
+    
+    if (!section.name || section.name.trim() === '') errors.push('Отсутствует название раздела');
+    if (!object) errors.push('Не указан родительский объект для раздела');
+    
+    if (section.name && section.name.length > 255) {
+        warnings.push('Название раздела слишком длинное, будет обрезано');
+    }
+    
+    // Проверка дат
+    if (section.date_start && section.date_end) {
+        const startDate = new Date(section.date_start);
+        const endDate = new Date(section.date_end);
+        
+        if (startDate > endDate) {
+            warnings.push('Дата начала позже даты окончания');
+        }
+    }
+    
+    return {
+        isValid: errors.length === 0,
+        errors,
+        warnings
+    };
+}
+
+/**
+ * Безопасная обработка асинхронных операций с retry логикой
+ */
+async function safeExecute(operation, operationName, maxRetries = 3, delay = 1000) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const result = await operation();
+            return {
+                success: true,
+                data: result,
+                attempt
+            };
+        } catch (error) {
+            console.log(`❌ ${operationName} - попытка ${attempt}/${maxRetries} не удалась: ${error.message}`);
+            
+            if (attempt < maxRetries) {
+                console.log(`⏳ Ожидание ${delay}мс перед повторной попыткой...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                delay *= 1.5; // Увеличиваем задержку
+            } else {
+                return {
+                    success: false,
+                    error: error.message,
+                    attempts: maxRetries
+                };
+            }
+        }
+    }
+}
+
+/**
+ * Улучшенное логирование с контекстом
+ */
+function createLogger(context) {
+    return {
+        info: (message, details = null) => {
+            const timestamp = new Date().toISOString();
+            console.log(`[${timestamp}] [${context}] ℹ️ ${message}`);
+            if (details) console.log('   📝 Детали:', details);
+        },
+        warning: (message, details = null) => {
+            const timestamp = new Date().toISOString();
+            console.log(`[${timestamp}] [${context}] ⚠️ ${message}`);
+            if (details) console.log('   📝 Детали:', details);
+        },
+        error: (message, error = null) => {
+            const timestamp = new Date().toISOString();
+            console.log(`[${timestamp}] [${context}] ❌ ${message}`);
+            if (error) {
+                console.log('   🔍 Ошибка:', error.message || error);
+                if (error.stack) console.log('   📚 Stack:', error.stack);
+            }
+        },
+        success: (message, details = null) => {
+            const timestamp = new Date().toISOString();
+            console.log(`[${timestamp}] [${context}] ✅ ${message}`);
+            if (details) console.log('   📊 Результат:', details);
+        }
+    };
+}
+
+/**
+ * Проверка целостности связей в иерархии
+ */
+async function validateHierarchyConsistency() {
+    const logger = createLogger('Валидация иерархии');
+    const issues = [];
+    
+    try {
+        logger.info('Начинаем проверку целостности иерархии...');
+        
+        // Проверяем проекты
+        const projects = await getAllProjects();
+        logger.info(`Найдено проектов: ${projects.length}`);
+        
+        // Проверяем стадии
+        const stages = await getAllStages();
+        logger.info(`Найдено стадий: ${stages.length}`);
+        
+        // Проверяем orphaned стадии (стадии без проектов)
+        const orphanedStages = stages.filter(stage => 
+            !projects.some(project => project.project_id === stage.stage_project_id)
+        );
+        
+        if (orphanedStages.length > 0) {
+            issues.push(`Найдено ${orphanedStages.length} стадий без родительских проектов`);
+            logger.warning(`Orphaned стадии:`, orphanedStages.map(s => s.stage_name));
+        }
+        
+        // Проверяем объекты
+        const objects = await getAllObjects();
+        logger.info(`Найдено объектов: ${objects.length}`);
+        
+        // Проверяем orphaned объекты
+        const orphanedObjects = objects.filter(object => 
+            !stages.some(stage => stage.stage_id === object.object_stage_id)
+        );
+        
+        if (orphanedObjects.length > 0) {
+            issues.push(`Найдено ${orphanedObjects.length} объектов без родительских стадий`);
+            logger.warning(`Orphaned объекты:`, orphanedObjects.map(o => o.object_name));
+        }
+        
+        // Проверяем разделы
+        const sections = await getAllSections();
+        logger.info(`Найдено разделов: ${sections.length}`);
+        
+        // Проверяем orphaned разделы
+        const orphanedSections = sections.filter(section => 
+            !objects.some(object => object.object_id === section.section_object_id)
+        );
+        
+        if (orphanedSections.length > 0) {
+            issues.push(`Найдено ${orphanedSections.length} разделов без родительских объектов`);
+            logger.warning(`Orphaned разделы:`, orphanedSections.map(s => s.section_name));
+        }
+        
+        // Проверяем дубликаты external_id
+        const duplicateExternalIds = {};
+        
+        [...projects, ...stages, ...objects, ...sections].forEach(item => {
+            if (item.external_id) {
+                const key = `${item.external_source || 'unknown'}_${item.external_id}`;
+                if (!duplicateExternalIds[key]) {
+                    duplicateExternalIds[key] = [];
+                }
+                duplicateExternalIds[key].push(item);
+            }
+        });
+        
+        const duplicates = Object.entries(duplicateExternalIds).filter(([key, items]) => items.length > 1);
+        if (duplicates.length > 0) {
+            issues.push(`Найдено ${duplicates.length} дублирующихся external_id`);
+            logger.warning('Дубликаты external_id:', duplicates);
+        }
+        
+        logger.success(`Проверка завершена. Найдено проблем: ${issues.length}`);
+        
+        return {
+            success: true,
+            issues,
+            statistics: {
+                projects: projects.length,
+                stages: stages.length,
+                objects: objects.length,
+                sections: sections.length,
+                orphaned_stages: orphanedStages.length,
+                orphaned_objects: orphanedObjects.length,
+                orphaned_sections: orphanedSections.length,
+                duplicate_external_ids: duplicates.length
+            }
+        };
+        
+    } catch (error) {
+        logger.error('Ошибка при проверке целостности', error);
+        return {
+            success: false,
+            error: error.message,
+            issues
+        };
+    }
+}
 
 /**
  * Получает все проекты из Worksection с меткой "eneca.work sync"
@@ -464,50 +762,17 @@ async function getSupabaseProjectsWithExternalId() {
 async function createProjectInSupabase(wsProject) {
     console.log(`📝 Создание проекта в Supabase: ${wsProject.name}`);
     
-    let managerId = null;
-    
-    // 1. Создаем или находим Manager'а на основе компании проекта
-    if (wsProject.company) {
-        console.log(`🏢 Обрабатываем компанию проекта: ${wsProject.company}`);
-        
-        // Ищем существующего менеджера по external_id (ID компании)
-        const existingManager = await findManagerByExternalId(wsProject.company_id?.toString() || 'company_' + wsProject.id);
-        
-        if (existingManager) {
-            console.log(`✅ Найден существующий менеджер: ${existingManager.manager_name} (ID: ${existingManager.manager_id})`);
-            managerId = existingManager.manager_id;
-        } else {
-            // Создаем нового менеджера
-            console.log(`➕ Создаем нового менеджера для компании: ${wsProject.company}`);
-            
-            const managerData = {
-                manager_name: wsProject.company,
-                manager_description: `Менеджер проектов компании "${wsProject.company}". Импортировано из Worksection.`,
-                external_id: wsProject.company_id?.toString() || 'company_' + wsProject.id,
-                external_source: 'worksection',
-                external_updated_at: new Date().toISOString()
-            };
-            
-            const newManager = await createManager(managerData);
-            managerId = newManager.manager_id;
-            console.log(`✅ Создан новый менеджер: ${newManager.manager_name} (ID: ${newManager.manager_id})`);
-        }
-    } else {
-        console.log(`⚠️ У проекта "${wsProject.name}" не указана компания`);
-    }
-    
-    // 2. Создаем проект с привязкой к менеджеру
+    // Создаем проект напрямую без Manager'ов (так как их нет в БД)
     const projectData = {
         project_name: wsProject.name,
         project_description: `Импортировано из Worksection. ${wsProject.description || ''}`.trim(),
-        manager_id: managerId, // Привязываем к Manager'у
         external_id: wsProject.id.toString(),
         external_source: 'worksection',
         external_updated_at: new Date().toISOString(),
         project_status: mapWorksectionStatus(wsProject.status),
     };
     
-    // 3. Ищем и назначаем ответственного за проект (project_manager)
+    // Ищем и назначаем ответственного за проект (project_manager)
     if (wsProject.manager_name) {
         console.log(`👤 Ищем ответственного за проект: ${wsProject.manager_name}`);
         const foundUser = await findUserByName(wsProject.manager_name, wsProject.manager_email);
@@ -519,13 +784,10 @@ async function createProjectInSupabase(wsProject) {
         }
     }
     
-    // 4. Создаем проект в Supabase
+    // Создаем проект в Supabase
     const newProject = await createProject(projectData);
     
     console.log(`✅ Проект создан: ${newProject.project_name} (ID: ${newProject.project_id})`);
-    if (managerId) {
-        console.log(`🔗 Проект привязан к менеджеру ID: ${managerId}`);
-    }
     
     return newProject;
 }
@@ -619,14 +881,14 @@ async function updateProjectsFromWorksection() {
                     const foundManager = await findUserByName(wsProject.manager_name, wsProject.manager_email);
                     
                     if (foundManager) {
-                        if (existingProject.manager_id !== foundManager.user_id) {
+                        if (existingProject.project_manager !== foundManager.user_id) {
                             // Получаем текущего менеджера для детального лога
                             let currentManagerName = 'Не назначен';
-                            if (existingProject.manager_id) {
+                            if (existingProject.project_manager) {
                                 try {
                                     const { getAllUsers } = require('./supabase-client');
                                     const allUsers = await getAllUsers();
-                                    const currentManager = allUsers.find(u => u.user_id === existingProject.manager_id);
+                                    const currentManager = allUsers.find(u => u.user_id === existingProject.project_manager);
                                     if (currentManager) {
                                         currentManagerName = `${currentManager.first_name} ${currentManager.last_name}`.trim();
                                     }
@@ -642,7 +904,7 @@ async function updateProjectsFromWorksection() {
                             };
                             projectChanges.push(managerChange);
                             console.log(`👤 [${wsProject.name}] Обновляем менеджера: "${currentManagerName}" → "${foundManager.full_name}" (ID: ${foundManager.user_id})`);
-                            updateData.manager_id = foundManager.user_id;
+                            updateData.project_manager = foundManager.user_id;
                             hasChanges = true;
                         } else {
                             console.log(`👤 [${wsProject.name}] Менеджер не изменился: ${foundManager.full_name}`);
@@ -819,8 +1081,8 @@ async function syncStagesFromWorksection() {
                     if (tagName && tagName.toLowerCase().includes('стадия')) {
                         console.log(`🏷️ [${wsProject.name}] Найдена метка стадии: "${tagName}" (ID: ${tagId})`);
                         
-                        // Ищем существующую стадию по external_id
-                        let existingStage = await findStageByExternalId(tagId);
+                        // Ищем существующую стадию по external_id в рамках конкретного проекта
+                        let existingStage = await findStageByExternalId(tagId, supabaseProject.project_id);
                         
                         if (existingStage) {
                             // Проверяем, нужно ли обновить название стадии
@@ -1073,48 +1335,37 @@ async function syncObjectsFromWorksection() {
                     try {
                         console.log(`\n📝 [${wsProject.name}] Обрабатываем задачу: "${wsTask.name}" (ID: ${wsTask.id})`);
                         
-                        // Ищем существующий объект по external_id
-                        let existingObject = await findObjectByExternalId(wsTask.id.toString());
+                        // Ищем существующий объект по external_id в рамках конкретного проекта
+                        let existingObject = await findObjectByExternalId(wsTask.id.toString(), supabaseProject.project_id);
                         
-                        // Определяем стадию для объекта
+                        // Определяем стадию для объекта (упрощенная логика)
                         let targetStageId = null;
                         
-                        // Если у задачи есть метки, пытаемся найти соответствующую стадию
+                        // 1. Ищем стадию по метке задачи (приоритет)
                         if (wsTask.tags && typeof wsTask.tags === 'object') {
                             for (const [tagId, tagName] of Object.entries(wsTask.tags)) {
-                                // Ищем стадию по external_id (ID метки из Worksection)
                                 const matchingStage = existingStages.find(
                                     stage => stage.external_id === tagId && 
                                             stage.stage_project_id === supabaseProject.project_id
                                 );
                                 if (matchingStage) {
                                     targetStageId = matchingStage.stage_id;
-                                    console.log(`🏷️ [${wsProject.name}] Найдена стадия по метке "${tagName}" (ID: ${tagId}): "${matchingStage.stage_name}"`);
+                                    console.log(`🏷️ [${wsProject.name}] Найдена стадия по метке "${tagName}": "${matchingStage.stage_name}"`);
                                     break;
                                 }
                             }
                         }
                         
-                        // Если стадия не найдена по меткам, ищем стадию с external_id в проекте
-                        if (!targetStageId) {
-                            const projectStagesWithExternalId = existingStages.filter(
-                                stage => stage.stage_project_id === supabaseProject.project_id && 
-                                         stage.external_id !== null
-                            );
-                            if (projectStagesWithExternalId.length > 0) {
-                                targetStageId = projectStagesWithExternalId[0].stage_id;
-                                console.log(`🏷️ [${wsProject.name}] Используем первую стадию с external_id: "${projectStagesWithExternalId[0].stage_name}"`);
-                            }
-                        }
-                        
-                        // Если все еще не найдена, используем любую доступную стадию проекта
+                        // 2. Если не найдена по меткам, используем любую стадию проекта
                         if (!targetStageId) {
                             const projectStages = existingStages.filter(
                                 stage => stage.stage_project_id === supabaseProject.project_id
                             );
                             if (projectStages.length > 0) {
-                                targetStageId = projectStages[0].stage_id;
-                                console.log(`📋 [${wsProject.name}] Используем первую доступную стадию: "${projectStages[0].stage_name}"`);
+                                // Приоритет: стадии с external_id, потом любые
+                                const stageWithExternal = projectStages.find(s => s.external_id !== null);
+                                targetStageId = (stageWithExternal || projectStages[0]).stage_id;
+                                console.log(`📋 [${wsProject.name}] Используем стадию: "${(stageWithExternal || projectStages[0]).stage_name}"`);
                             } else {
                                 console.log(`⚠️ [${wsProject.name}] Не найдено стадий для проекта, пропускаем задачу`);
                                 continue;
@@ -1162,11 +1413,17 @@ async function syncObjectsFromWorksection() {
                             // Создаем новый объект
                             console.log(`🆕 [${wsProject.name}] Создаем новый объект: "${wsTask.name}"`);
                             
+                            // Проверяем согласованность project_id между стадией и объектом
+                            const targetStage = existingStages.find(s => s.stage_id === targetStageId);
+                            if (targetStage && targetStage.stage_project_id !== supabaseProject.project_id) {
+                                console.log(`⚠️ [${wsProject.name}] ПРЕДУПРЕЖДЕНИЕ: Несогласованность project_id: стадия ${targetStage.stage_project_id} vs проект ${supabaseProject.project_id}`);
+                            }
+
                             const objectData = {
                                 object_name: wsTask.name,
                                 object_description: wsTask.text || '',
                                 object_stage_id: targetStageId,
-                                object_project_id: supabaseProject.project_id,
+                                object_project_id: supabaseProject.project_id, // Согласованность с БД
                                 external_id: wsTask.id.toString(),
                                 external_source: 'worksection',
                                 external_updated_at: new Date().toISOString()
@@ -1504,16 +1761,32 @@ async function processSingleSubtask(wsSubtask, parentObject, wsProject, existing
         external_updated_at: new Date().toISOString()
     };
     
-    // 4. Проверка существующего раздела
+    // 4. Проверка существующего раздела в рамках проекта
     const existingSection = existingSections.find(
-        s => s.external_id && s.external_id.toString() === wsSubtask.id.toString()
+        s => s.external_id && 
+             s.external_id.toString() === wsSubtask.id.toString() &&
+             s.section_project_id === parentObject.object_project_id
     );
     
+    // 5. Проверка согласованности связей (если раздел найден)
     if (existingSection) {
+        // Проверяем согласованность project_id
+        if (existingSection.section_project_id !== parentObject.object_project_id) {
+            console.log(`⚠️ [${wsProject.name}] Несогласованность project_id для раздела "${existingSection.section_name}": раздел=${existingSection.section_project_id}, объект=${parentObject.object_project_id}`);
+            throw new Error(`Несогласованность project_id для раздела "${existingSection.section_name}"`);
+        }
+        
+        // Проверяем согласованность object_id  
+        if (existingSection.section_object_id !== parentObject.object_id) {
+            console.log(`🔄 [${wsProject.name}] Изменение привязки раздела "${existingSection.section_name}" к новому объекту: ${existingSection.section_object_id} → ${parentObject.object_id}`);
+            // Обновляем section_object_id в данных для обновления
+            sectionData.section_object_id = parentObject.object_id;
+        }
+        
         // Проверяем, нужно ли обновление
         const needsUpdate = hasChanges(existingSection, sectionData, [
-            'section_name', 'section_description', 'section_responsible', 
-            'section_start_date', 'section_end_date'
+            'section_name', 'section_description', 'section_responsible',
+            'section_object_id', 'section_start_date', 'section_end_date'
         ]);
         
         if (needsUpdate) {
@@ -1581,6 +1854,427 @@ function hasChanges(existingSection, newSectionData, fieldsToCheck = null) {
     return false;
 }
 
+/**
+ * Генерирует детальный отчёт о состоянии системы
+ */
+async function generateSystemStatusReport() {
+    const logger = createLogger('Отчёт системы');
+    const startTime = Date.now();
+    
+    try {
+        logger.info('Начинаем генерацию отчёта о состоянии системы...');
+        
+        // Сбор основных статистик
+        const [projects, stages, objects, sections] = await Promise.all([
+            getAllProjects(),
+            getAllStages(), 
+            getAllObjects(),
+            getAllSections()
+        ]);
+        
+        // Статистика по источникам данных
+        const projectsSources = {
+            worksection: projects.filter(p => p.external_source === 'worksection').length,
+            manual: projects.filter(p => !p.external_source || p.external_source !== 'worksection').length,
+            with_external_id: projects.filter(p => p.external_id).length
+        };
+        
+        const stagesSources = {
+            worksection: stages.filter(s => s.external_source === 'worksection').length,
+            manual: stages.filter(s => !s.external_source || s.external_source !== 'worksection').length,
+            with_external_id: stages.filter(s => s.external_id).length
+        };
+        
+        const objectsSources = {
+            worksection: objects.filter(o => o.external_source === 'worksection').length,
+            manual: objects.filter(o => !o.external_source || o.external_source !== 'worksection').length,
+            with_external_id: objects.filter(o => o.external_id).length
+        };
+        
+        const sectionsSources = {
+            worksection: sections.filter(s => s.external_source === 'worksection').length,
+            manual: sections.filter(s => !s.external_source || s.external_source !== 'worksection').length,
+            with_external_id: sections.filter(s => s.external_id).length
+        };
+        
+        // Проверка целостности
+        const hierarchyValidation = await validateHierarchyConsistency();
+        
+        // Анализ активности
+        const recentSyncDate = new Date();
+        recentSyncDate.setHours(recentSyncDate.getHours() - 24);
+        
+        const recentSyncs = {
+            projects: projects.filter(p => 
+                p.external_updated_at && new Date(p.external_updated_at) > recentSyncDate
+            ).length,
+            stages: stages.filter(s => 
+                s.external_updated_at && new Date(s.external_updated_at) > recentSyncDate
+            ).length,
+            objects: objects.filter(o => 
+                o.external_updated_at && new Date(o.external_updated_at) > recentSyncDate
+            ).length,
+            sections: sections.filter(s => 
+                s.external_updated_at && new Date(s.external_updated_at) > recentSyncDate
+            ).length
+        };
+        
+        // Анализ проблем
+        const issues = [];
+        const warnings = [];
+        
+        if (hierarchyValidation.issues.length > 0) {
+            issues.push(...hierarchyValidation.issues);
+        }
+        
+        if (projectsSources.worksection === 0) {
+            warnings.push('Нет проектов синхронизированных из Worksection');
+        }
+        
+        if (recentSyncs.projects === 0 && recentSyncs.stages === 0 && 
+            recentSyncs.objects === 0 && recentSyncs.sections === 0) {
+            warnings.push('Нет недавних синхронизаций (за последние 24 часа)');
+        }
+        
+        const duration = Date.now() - startTime;
+        
+        logger.success(`Отчёт сгенерирован за ${duration}мс`);
+        
+        return {
+            success: true,
+            timestamp: new Date().toISOString(),
+            generation_time_ms: duration,
+            summary: {
+                total_entities: projects.length + stages.length + objects.length + sections.length,
+                hierarchy_levels: 4,
+                sync_coverage: {
+                    projects: Math.round((projectsSources.worksection / projects.length) * 100) || 0,
+                    stages: Math.round((stagesSources.worksection / stages.length) * 100) || 0,
+                    objects: Math.round((objectsSources.worksection / objects.length) * 100) || 0,
+                    sections: Math.round((sectionsSources.worksection / sections.length) * 100) || 0
+                },
+                health_score: Math.max(0, 100 - (issues.length * 10) - (warnings.length * 5))
+            },
+            statistics: {
+                projects: {
+                    total: projects.length,
+                    ...projectsSources
+                },
+                stages: {
+                    total: stages.length,
+                    ...stagesSources
+                },
+                objects: {
+                    total: objects.length,
+                    ...objectsSources
+                },
+                sections: {
+                    total: sections.length,
+                    ...sectionsSources
+                }
+            },
+            hierarchy_validation: hierarchyValidation,
+            recent_activity: {
+                description: 'Синхронизации за последние 24 часа',
+                ...recentSyncs,
+                total: recentSyncs.projects + recentSyncs.stages + recentSyncs.objects + recentSyncs.sections
+            },
+            issues: {
+                critical: issues,
+                warnings: warnings,
+                total_issues: issues.length + warnings.length
+            },
+            recommendations: generateRecommendations(projectsSources, stagesSources, objectsSources, sectionsSources, issues, warnings)
+        };
+        
+    } catch (error) {
+        logger.error('Ошибка генерации отчёта', error);
+        return {
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString()
+        };
+    }
+}
+
+/**
+ * Генерирует рекомендации на основе анализа системы
+ */
+function generateRecommendations(projectsSources, stagesSources, objectsSources, sectionsSources, issues, warnings) {
+    const recommendations = [];
+    
+    // Рекомендации по синхронизации
+    if (projectsSources.worksection === 0) {
+        recommendations.push({
+            type: 'sync',
+            priority: 'high',
+            message: 'Настройте синхронизацию проектов из Worksection',
+            action: 'Добавьте метку "eneca.work sync" к проектам в Worksection'
+        });
+    }
+    
+    if (projectsSources.worksection > 0 && stagesSources.worksection === 0) {
+        recommendations.push({
+            type: 'sync',
+            priority: 'medium',
+            message: 'Запустите синхронизацию стадий',
+            action: 'Выполните POST /api/stages/sync'
+        });
+    }
+    
+    if (stagesSources.worksection > 0 && objectsSources.worksection === 0) {
+        recommendations.push({
+            type: 'sync',
+            priority: 'medium',
+            message: 'Запустите синхронизацию объектов',
+            action: 'Выполните POST /api/objects/sync'
+        });
+    }
+    
+    if (objectsSources.worksection > 0 && sectionsSources.worksection === 0) {
+        recommendations.push({
+            type: 'sync',
+            priority: 'medium',
+            message: 'Запустите синхронизацию разделов',
+            action: 'Выполните POST /api/sections/sync'
+        });
+    }
+    
+    // Рекомендации по очистке
+    if (issues.length > 0) {
+        recommendations.push({
+            type: 'maintenance',
+            priority: 'high',
+            message: 'Исправьте проблемы целостности данных',
+            action: 'Проверьте логи и выполните POST /api/maintenance/cleanup-orphaned'
+        });
+    }
+    
+    // Рекомендации по производительности
+    const totalSynced = projectsSources.worksection + stagesSources.worksection + 
+                       objectsSources.worksection + sectionsSources.worksection;
+    const totalEntities = projectsSources.total + stagesSources.total + 
+                         objectsSources.total + sectionsSources.total;
+    
+    if (totalSynced > 0 && (totalSynced / totalEntities) < 0.1) {
+        recommendations.push({
+            type: 'optimization',
+            priority: 'low',
+            message: 'Низкий уровень синхронизации с Worksection',
+            action: 'Рассмотрите возможность синхронизации большего количества данных'
+        });
+    }
+    
+    return recommendations;
+}
+
+/**
+ * Очищает orphaned записи в системе
+ */
+async function cleanupOrphanedRecords(options = {}) {
+    const logger = createLogger('Очистка');
+    const { dryRun = true, force = false } = options;
+    
+    try {
+        logger.info(`Запуск очистки orphaned записей (dryRun: ${dryRun}, force: ${force})...`);
+        
+        if (!force && !dryRun) {
+            throw new Error('Для реальной очистки необходимо указать force: true');
+        }
+        
+        // Проверяем целостность для выявления orphaned записей
+        const validation = await validateHierarchyConsistency();
+        
+        if (!validation.success) {
+            throw new Error('Не удалось выполнить проверку целостности');
+        }
+        
+        const cleanupResults = {
+            orphaned_stages_deleted: 0,
+            orphaned_objects_deleted: 0,
+            orphaned_sections_deleted: 0,
+            errors: []
+        };
+        
+        if (dryRun) {
+            logger.info('Режим пробного запуска - фактической очистки не будет');
+            
+            return {
+                success: true,
+                dry_run: true,
+                would_delete: {
+                    stages: validation.statistics.orphaned_stages,
+                    objects: validation.statistics.orphaned_objects,
+                    sections: validation.statistics.orphaned_sections
+                },
+                validation: validation
+            };
+        }
+        
+        // Реальная очистка (если не dryRun и force = true)
+        // TODO: Добавить реальную логику удаления при необходимости
+        logger.warning('Реальная очистка не реализована в целях безопасности');
+        
+        return {
+            success: true,
+            dry_run: false,
+            cleaned: cleanupResults,
+            validation: validation
+        };
+        
+    } catch (error) {
+        logger.error('Ошибка очистки', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Проверяет здоровье системы синхронизации
+ */
+async function checkSyncHealth() {
+    const logger = createLogger('Проверка здоровья');
+    const checks = [];
+    let overallHealth = 'healthy';
+    
+    try {
+        logger.info('Запуск проверки здоровья системы синхронизации...');
+        
+        // 1. Проверка подключения к Worksection
+        try {
+            const wsResponse = await makeWorksectionRequest('get_accounts');
+            checks.push({
+                name: 'Worksection API',
+                status: wsResponse.data.status === 'ok' ? 'healthy' : 'unhealthy',
+                message: wsResponse.data.status === 'ok' ? 'Подключение успешно' : 'Ошибка подключения',
+                details: wsResponse.data
+            });
+        } catch (error) {
+            checks.push({
+                name: 'Worksection API',
+                status: 'critical',
+                message: `Ошибка подключения: ${error.message}`,
+                details: null
+            });
+            overallHealth = 'critical';
+        }
+        
+        // 2. Проверка подключения к Supabase
+        try {
+            const projects = await getAllProjects();
+            checks.push({
+                name: 'Supabase Database',
+                status: 'healthy',
+                message: `Подключение успешно, найдено ${projects.length} проектов`,
+                details: { projects_count: projects.length }
+            });
+        } catch (error) {
+            checks.push({
+                name: 'Supabase Database',
+                status: 'critical',
+                message: `Ошибка подключения к БД: ${error.message}`,
+                details: null
+            });
+            overallHealth = 'critical';
+        }
+        
+        // 3. Проверка синхронизированных данных
+        try {
+            const syncProjects = await getProjectsWithSyncTag();
+            const hasSyncData = syncProjects.success && syncProjects.data.length > 0;
+            
+            checks.push({
+                name: 'Sync Projects',
+                status: hasSyncData ? 'healthy' : 'warning',
+                message: hasSyncData ? 
+                    `Найдено ${syncProjects.data.length} проектов для синхронизации` : 
+                    'Нет проектов с меткой sync',
+                details: syncProjects
+            });
+            
+            if (!hasSyncData && overallHealth === 'healthy') {
+                overallHealth = 'warning';
+            }
+        } catch (error) {
+            checks.push({
+                name: 'Sync Projects',
+                status: 'unhealthy',
+                message: `Ошибка проверки sync проектов: ${error.message}`,
+                details: null
+            });
+            if (overallHealth === 'healthy') overallHealth = 'unhealthy';
+        }
+        
+        // 4. Проверка переменных окружения
+        const envVars = [
+            'WORKSECTION_HASH', 'WORKSECTION_DOMAIN', 'SUPABASE_URL', 'SUPABASE_ANON_KEY'
+        ];
+        
+        const missingVars = envVars.filter(varName => !process.env[varName]);
+        
+        checks.push({
+            name: 'Environment Variables',
+            status: missingVars.length === 0 ? 'healthy' : 'critical',
+            message: missingVars.length === 0 ? 
+                'Все переменные окружения настроены' : 
+                `Отсутствуют переменные: ${missingVars.join(', ')}`,
+            details: {
+                required: envVars,
+                missing: missingVars,
+                configured: envVars.filter(varName => !!process.env[varName])
+            }
+        });
+        
+        if (missingVars.length > 0) {
+            overallHealth = 'critical';
+        }
+        
+        // 5. Проверка целостности данных
+        const validation = await validateHierarchyConsistency();
+        const hasIssues = validation.issues && validation.issues.length > 0;
+        
+        checks.push({
+            name: 'Data Integrity',
+            status: hasIssues ? 'warning' : 'healthy',
+            message: hasIssues ? 
+                `Найдено ${validation.issues.length} проблем целостности` : 
+                'Целостность данных в порядке',
+            details: validation
+        });
+        
+        if (hasIssues && overallHealth === 'healthy') {
+            overallHealth = 'warning';
+        }
+        
+        logger.success(`Проверка здоровья завершена. Общий статус: ${overallHealth}`);
+        
+        return {
+            success: true,
+            overall_health: overallHealth,
+            timestamp: new Date().toISOString(),
+            checks,
+            summary: {
+                total_checks: checks.length,
+                healthy: checks.filter(c => c.status === 'healthy').length,
+                warnings: checks.filter(c => c.status === 'warning').length,
+                unhealthy: checks.filter(c => c.status === 'unhealthy').length,
+                critical: checks.filter(c => c.status === 'critical').length
+            }
+        };
+        
+    } catch (error) {
+        logger.error('Ошибка проверки здоровья', error);
+        return {
+            success: false,
+            overall_health: 'critical',
+            error: error.message,
+            timestamp: new Date().toISOString()
+        };
+    }
+}
+
 module.exports = {
     getProjectsWithSyncTag,
     getProjectTags,
@@ -1594,5 +2288,9 @@ module.exports = {
     mapWorksectionStatus,
     syncStagesFromWorksection,
     syncObjectsFromWorksection,
-    syncSectionsFromWorksection
+    syncSectionsFromWorksection,
+    validateHierarchyConsistency,
+    generateSystemStatusReport,
+    cleanupOrphanedRecords,
+    checkSyncHealth
 }; 

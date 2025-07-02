@@ -13,7 +13,11 @@ const {
     updateProjectsFromWorksection,
     syncStagesFromWorksection,
     syncObjectsFromWorksection,
-    syncSectionsFromWorksection
+    syncSectionsFromWorksection,
+    validateHierarchyConsistency,
+    generateSystemStatusReport,
+    cleanupOrphanedRecords,
+    checkSyncHealth
 } = require('../functions/projects');
 
 class WSToWorkApp {
@@ -322,6 +326,78 @@ class WSToWorkApp {
                 });
             }
         });
+
+        // API для проверки целостности данных
+        this.app.get('/api/validate/hierarchy', async (req, res) => {
+            try {
+                console.log('🔍 Запуск проверки целостности иерархии...');
+                
+                const result = await validateHierarchyConsistency();
+                
+                res.json(result);
+
+            } catch (error) {
+                console.error('❌ Ошибка проверки целостности:', error.message);
+                res.status(500).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // API для получения детального отчёта о состоянии системы
+        this.app.get('/api/report/system-status', async (req, res) => {
+            try {
+                console.log('📊 Генерация отчёта о состоянии системы...');
+                
+                const result = await generateSystemStatusReport();
+                
+                res.json(result);
+
+            } catch (error) {
+                console.error('❌ Ошибка генерации отчёта:', error.message);
+                res.status(500).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // API для очистки orphaned записей
+        this.app.post('/api/maintenance/cleanup-orphaned', async (req, res) => {
+            try {
+                console.log('🧹 Запуск очистки orphaned записей...');
+                
+                const result = await cleanupOrphanedRecords(req.body);
+                
+                res.json(result);
+
+            } catch (error) {
+                console.error('❌ Ошибка очистки orphaned записей:', error.message);
+                res.status(500).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // API для проверки здоровья синхронизации
+        this.app.get('/api/health/sync-status', async (req, res) => {
+            try {
+                console.log('🏥 Проверка здоровья системы синхронизации...');
+                
+                const result = await checkSyncHealth();
+                
+                res.json(result);
+
+            } catch (error) {
+                console.error('❌ Ошибка проверки здоровья синхронизации:', error.message);
+                res.status(500).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
     }
 
     async syncProjects(params = {}) {
@@ -382,6 +458,7 @@ class WSToWorkApp {
     async runFullSync() {
         const startTime = Date.now();
         const logs = [];
+        const detailedLogs = [];
         const results = {
             projects: null,
             stages: null,
@@ -391,252 +468,602 @@ class WSToWorkApp {
         
         let totalCreated = 0;
         let totalUpdated = 0;
+        let totalUnchanged = 0;
         let totalErrors = 0;
+        let warnings = [];
+        let criticalErrors = [];
         
-        try {
-            logs.push('🚀 === НАЧАЛО ПОЛНОЙ СИНХРОНИЗАЦИИ ===');
-            logs.push(`⏰ Время начала: ${new Date().toLocaleString('ru-RU')}`);
-            logs.push('');
+        // Функция для добавления логов с временными метками
+        const addLog = (message, level = 'info', details = null) => {
+            const timestamp = new Date().toISOString();
+            const logEntry = `[${timestamp}] ${message}`;
             
-            // 1. Синхронизация проектов (обязательно первая)
-            logs.push('🏢 ЭТАП 1/4: Синхронизация проектов...');
-            try {
-                results.projects = await syncProjectsToSupabase();
-                
-                if (results.projects.success) {
-                    const created = results.projects.created?.length || 0;
-                    const updated = results.projects.updated?.length || 0;
-                    const errors = results.projects.errors?.length || 0;
+            logs.push(logEntry);
+            
+            if (details) {
+                detailedLogs.push({
+                    timestamp,
+                    level,
+                    message,
+                    details
+                });
+            }
+            
+            console.log(logEntry);
+        };
+        
+        // Функция для обработки ошибок с retry логикой
+        const executeWithRetry = async (operation, operationName, maxRetries = 3, delay = 1000) => {
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    addLog(`🔄 ${operationName} - попытка ${attempt}/${maxRetries}`);
+                    const result = await operation();
+                    addLog(`✅ ${operationName} - успешно выполнено`);
+                    return result;
+                } catch (error) {
+                    const errorMsg = `❌ ${operationName} - ошибка на попытке ${attempt}/${maxRetries}: ${error.message}`;
+                    addLog(errorMsg, 'error', { attempt, maxRetries, error: error.message });
                     
-                    totalCreated += created;
-                    totalUpdated += updated;
-                    totalErrors += errors;
-                    
-                    logs.push(`✅ Проекты: создано ${created}, обновлено ${updated}, ошибок ${errors}`);
-                    
-                    // Детальные логи по каждому проекту
-                    if (results.projects.created && results.projects.created.length > 0) {
-                        logs.push('  📝 Созданные проекты:');
-                        results.projects.created.forEach(project => {
-                            logs.push(`    + ${project.project_name} (ID: ${project.project_id})`);
-                        });
+                    if (attempt < maxRetries) {
+                        addLog(`⏳ Ожидание ${delay}мс перед повторной попыткой...`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        delay *= 2; // Экспоненциальный backoff
+                    } else {
+                        criticalErrors.push(`${operationName}: ${error.message}`);
+                        throw error;
                     }
-                    
-                    if (results.projects.updated && results.projects.updated.length > 0) {
-                        logs.push('  📝 Обновленные проекты:');
-                        results.projects.updated.forEach(project => {
-                            logs.push(`    ↻ ${project.project_name} (ID: ${project.project_id})`);
-                        });
-                    }
-                    
-                    if (results.projects.errors && results.projects.errors.length > 0) {
-                        logs.push('  ❌ Ошибки проектов:');
-                        results.projects.errors.forEach(error => {
-                            logs.push(`    ⚠️ ${error}`);
-                        });
-                    }
-                } else {
-                    logs.push(`❌ Ошибка синхронизации проектов: ${results.projects.error}`);
-                    totalErrors++;
                 }
-            } catch (error) {
-                logs.push(`❌ Критическая ошибка проектов: ${error.message}`);
-                totalErrors++;
+            }
+        };
+        
+        // Функция валидации результата синхронизации
+        const validateSyncResult = (result, entityType) => {
+            if (!result) {
+                warnings.push(`${entityType}: результат синхронизации пустой`);
+                return false;
             }
             
-            logs.push('');
-            
-            // 2. Синхронизация стадий
-            logs.push('🎯 ЭТАП 2/4: Синхронизация стадий...');
-            try {
-                results.stages = await syncStagesFromWorksection();
-                
-                if (results.stages.success) {
-                    const created = results.stages.created?.length || 0;
-                    const updated = results.stages.updated?.length || 0;
-                    const errors = results.stages.errors?.length || 0;
-                    
-                    totalCreated += created;
-                    totalUpdated += updated;
-                    totalErrors += errors;
-                    
-                    logs.push(`✅ Стадии: создано ${created}, обновлено ${updated}, ошибок ${errors}`);
-                    
-                    // Детальные логи по каждой стадии
-                    if (results.stages.created && results.stages.created.length > 0) {
-                        logs.push('  📝 Созданные стадии:');
-                        results.stages.created.forEach(stage => {
-                            logs.push(`    + ${stage.stage_name} (Проект: ${stage.project?.project_name || 'N/A'})`);
-                        });
-                    }
-                    
-                    if (results.stages.updated && results.stages.updated.length > 0) {
-                        logs.push('  📝 Обновленные стадии:');
-                        results.stages.updated.forEach(stage => {
-                            logs.push(`    ↻ ${stage.stage_name} (Проект: ${stage.project?.project_name || 'N/A'})`);
-                        });
-                    }
-                    
-                    if (results.stages.errors && results.stages.errors.length > 0) {
-                        logs.push('  ❌ Ошибки стадий:');
-                        results.stages.errors.forEach(error => {
-                            logs.push(`    ⚠️ ${error}`);
-                        });
-                    }
-                } else {
-                    logs.push(`❌ Ошибка синхронизации стадий: ${results.stages.error}`);
-                    totalErrors++;
-                }
-            } catch (error) {
-                logs.push(`❌ Критическая ошибка стадий: ${error.message}`);
-                totalErrors++;
+            if (typeof result.success !== 'boolean') {
+                warnings.push(`${entityType}: отсутствует флаг success в результате`);
+                return false;
             }
             
-            logs.push('');
-            
-            // 3. Синхронизация объектов
-            logs.push('📦 ЭТАП 3/4: Синхронизация объектов...');
-            try {
-                results.objects = await syncObjectsFromWorksection();
-                
-                if (results.objects.success) {
-                    const created = results.objects.created?.length || 0;
-                    const updated = results.objects.updated?.length || 0;
-                    const errors = results.objects.errors?.length || 0;
-                    
-                    totalCreated += created;
-                    totalUpdated += updated;
-                    totalErrors += errors;
-                    
-                    logs.push(`✅ Объекты: создано ${created}, обновлено ${updated}, ошибок ${errors}`);
-                    
-                    // Детальные логи по каждому объекту
-                    if (results.objects.created && results.objects.created.length > 0) {
-                        logs.push('  📝 Созданные объекты:');
-                        results.objects.created.forEach(object => {
-                            logs.push(`    + ${object.object_name} (Стадия: ${object.stage?.stage_name || 'N/A'})`);
-                        });
-                    }
-                    
-                    if (results.objects.updated && results.objects.updated.length > 0) {
-                        logs.push('  📝 Обновленные объекты:');
-                        results.objects.updated.forEach(object => {
-                            logs.push(`    ↻ ${object.object_name} (Стадия: ${object.stage?.stage_name || 'N/A'})`);
-                        });
-                    }
-                    
-                    if (results.objects.errors && results.objects.errors.length > 0) {
-                        logs.push('  ❌ Ошибки объектов:');
-                        results.objects.errors.forEach(error => {
-                            logs.push(`    ⚠️ ${error}`);
-                        });
-                    }
-                } else {
-                    logs.push(`❌ Ошибка синхронизации объектов: ${results.objects.error}`);
-                    totalErrors++;
-                }
-            } catch (error) {
-                logs.push(`❌ Критическая ошибка объектов: ${error.message}`);
-                totalErrors++;
+            if (!result.data && !result.summary) {
+                warnings.push(`${entityType}: отсутствуют данные и сводка в результате`);
+                return false;
             }
             
-            logs.push('');
-            
-            // 4. Синхронизация разделов
-            logs.push('📑 ЭТАП 4/4: Синхронизация разделов...');
-            try {
-                results.sections = await syncSectionsFromWorksection();
-                
-                if (results.sections.success) {
-                    const created = results.sections.created?.length || 0;
-                    const updated = results.sections.updated?.length || 0;
-                    const errors = results.sections.errors?.length || 0;
-                    
-                    totalCreated += created;
-                    totalUpdated += updated;
-                    totalErrors += errors;
-                    
-                    logs.push(`✅ Разделы: создано ${created}, обновлено ${updated}, ошибок ${errors}`);
-                    
-                    // Детальные логи по каждому разделу
-                    if (results.sections.created && results.sections.created.length > 0) {
-                        logs.push('  📝 Созданные разделы:');
-                        results.sections.created.forEach(section => {
-                            logs.push(`    + ${section.section_name} (Объект: ${section.object?.object_name || 'N/A'})`);
-                        });
-                    }
-                    
-                    if (results.sections.updated && results.sections.updated.length > 0) {
-                        logs.push('  📝 Обновленные разделы:');
-                        results.sections.updated.forEach(section => {
-                            logs.push(`    ↻ ${section.section_name} (Объект: ${section.object?.object_name || 'N/A'})`);
-                        });
-                    }
-                    
-                    if (results.sections.errors && results.sections.errors.length > 0) {
-                        logs.push('  ❌ Ошибки разделов:');
-                        results.sections.errors.forEach(error => {
-                            logs.push(`    ⚠️ ${error}`);
-                        });
-                    }
-                } else {
-                    logs.push(`❌ Ошибка синхронизации разделов: ${results.sections.error}`);
-                    totalErrors++;
-                }
-            } catch (error) {
-                logs.push(`❌ Критическая ошибка разделов: ${error.message}`);
-                totalErrors++;
+            return true;
+        };
+        
+        // Функция для сбора статистики
+        const collectStats = (result, entityType) => {
+            if (!validateSyncResult(result, entityType)) {
+                return { created: 0, updated: 0, unchanged: 0, errors: 1 };
             }
             
-            // Итоговая статистика
-            const duration = Date.now() - startTime;
-            const durationSeconds = (duration / 1000).toFixed(1);
-            
-            logs.push('');
-            logs.push('🏁 === ЗАВЕРШЕНИЕ ПОЛНОЙ СИНХРОНИЗАЦИИ ===');
-            logs.push(`⏱️ Общее время выполнения: ${durationSeconds} сек`);
-            logs.push(`✅ Всего создано: ${totalCreated}`);
-            logs.push(`🔄 Всего обновлено: ${totalUpdated}`);
-            logs.push(`❌ Всего ошибок: ${totalErrors}`);
-            logs.push(`⏰ Время завершения: ${new Date().toLocaleString('ru-RU')}`);
-            
-            const success = totalErrors === 0;
-            if (success) {
-                logs.push('🎉 ПОЛНАЯ СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА УСПЕШНО!');
-            } else {
-                logs.push('⚠️ ПОЛНАЯ СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА С ОШИБКАМИ');
-            }
+            const summary = result.summary || {};
+            const data = result.data || {};
             
             return {
+                created: summary.created || data.created?.length || 0,
+                updated: summary.updated || data.updated?.length || 0,
+                unchanged: summary.unchanged || data.unchanged?.length || 0,
+                errors: summary.errors || data.errors?.length || 0
+            };
+        };
+        
+        // Функция для детального логирования результатов
+        const logDetailedResults = (result, entityType, stats) => {
+            if (!result || !result.success) return;
+            
+            const data = result.data || {};
+            
+            // Логируем созданные элементы
+            if (data.created && data.created.length > 0) {
+                addLog(`  📝 Созданные ${entityType.toLowerCase()}:`);
+                data.created.slice(0, 10).forEach(item => { // Показываем только первые 10
+                    const name = item[`${entityType.toLowerCase()}_name`] || 
+                                item.project_name || 
+                                item.section?.section_name || 
+                                'Без названия';
+                    const id = item[`${entityType.toLowerCase()}_id`] || 
+                              item.project_id || 
+                              item.section?.section_id || 
+                              'N/A';
+                    addLog(`    + ${name} (ID: ${id})`);
+                });
+                
+                if (data.created.length > 10) {
+                    addLog(`    ... и ещё ${data.created.length - 10} элементов`);
+                }
+            }
+            
+            // Логируем обновлённые элементы
+            if (data.updated && data.updated.length > 0) {
+                addLog(`  🔄 Обновлённые ${entityType.toLowerCase()}:`);
+                data.updated.slice(0, 5).forEach(item => {
+                    const name = item[`${entityType.toLowerCase()}_name`] || 
+                                item.project_name || 
+                                item.section?.section_name || 
+                                'Без названия';
+                    addLog(`    ↻ ${name}`);
+                });
+                
+                if (data.updated.length > 5) {
+                    addLog(`    ... и ещё ${data.updated.length - 5} элементов`);
+                }
+            }
+            
+            // Логируем ошибки
+            if (data.errors && data.errors.length > 0) {
+                addLog(`  ❌ Ошибки ${entityType.toLowerCase()}:`);
+                data.errors.slice(0, 5).forEach(error => {
+                    const errorMsg = typeof error === 'string' ? error : 
+                                   error.error || error.message || JSON.stringify(error);
+                    addLog(`    ⚠️ ${errorMsg}`);
+                });
+                
+                if (data.errors.length > 5) {
+                    addLog(`    ... и ещё ${data.errors.length - 5} ошибок`);
+                }
+            }
+        };
+        
+        // Функция для проверки доступности API
+        const checkAPIAvailability = async () => {
+            try {
+                addLog('🔌 Проверка доступности Supabase...');
+                
+                // Проверка Supabase
+                const { createClient } = require('@supabase/supabase-js');
+                const supabase = createClient(
+                    process.env.SUPABASE_URL,
+                    process.env.SUPABASE_ANON_KEY
+                );
+                
+                const { data: healthCheck, error } = await supabase
+                    .from('projects')
+                    .select('project_id')
+                    .limit(1);
+                
+                if (error) {
+                    throw new Error(`Supabase недоступен: ${error.message}`);
+                }
+                
+                addLog('✅ Supabase доступен');
+                
+                // Проверка Worksection API
+                addLog('🔌 Проверка доступности Worksection API...');
+                const { makeWorksectionRequest } = require('../functions/worksection-api');
+                
+                try {
+                    await makeWorksectionRequest('get_projects', { page: 1 });
+                    addLog('✅ Worksection API доступен');
+                } catch (apiError) {
+                    throw new Error(`Worksection API недоступен: ${apiError.message}`);
+                }
+                
+                return true;
+            } catch (error) {
+                addLog(`❌ Ошибка проверки API: ${error.message}`, 'error');
+                return false;
+            }
+        };
+        
+        // Функция для валидации конфигурации
+        const validateConfiguration = () => {
+            const configErrors = [];
+            const configWarnings = [];
+            
+            // Проверка обязательных переменных
+            if (!process.env.SUPABASE_URL) configErrors.push('SUPABASE_URL не задан');
+            if (!process.env.SUPABASE_ANON_KEY) configErrors.push('SUPABASE_ANON_KEY не задан');
+            if (!process.env.WORKSECTION_HASH) configErrors.push('WORKSECTION_HASH не задан');
+            if (!process.env.WORKSECTION_DOMAIN) configErrors.push('WORKSECTION_DOMAIN не задан');
+            
+            // Проверка формата переменных
+            if (process.env.SUPABASE_URL && !process.env.SUPABASE_URL.startsWith('https://')) {
+                configWarnings.push('URL Supabase должен начинаться с https://');
+            }
+            
+            if (process.env.WORKSECTION_DOMAIN && !process.env.WORKSECTION_DOMAIN.includes('.worksection.')) {
+                configWarnings.push('Домен Worksection должен содержать .worksection.');
+            }
+            
+            if (process.env.WORKSECTION_HASH && process.env.WORKSECTION_HASH.length !== 32) {
+                configWarnings.push('API ключ Worksection должен содержать 32 символа');
+            }
+            
+            // Проверка опциональных переменных производительности
+            const optionalVars = {
+                'SYNC_BATCH_SIZE': 'Размер батча для синхронизации',
+                'SYNC_REQUEST_DELAY': 'Задержка между запросами',
+                'SYNC_MAX_RETRIES': 'Максимальное количество повторных попыток'
+            };
+            
+            Object.entries(optionalVars).forEach(([varName, description]) => {
+                if (!process.env[varName]) {
+                    configWarnings.push(`${varName} не задан - используется значение по умолчанию (${description})`);
+                }
+            });
+            
+            return { errors: configErrors, warnings: configWarnings };
+        };
+        
+        try {
+            addLog('🚀 === НАЧАЛО ПОЛНОЙ СИНХРОНИЗАЦИИ ===');
+            addLog(`⏰ Время начала: ${new Date().toLocaleString('ru-RU')}`);
+            addLog(`🖥️ Операционная система: ${process.platform}`);
+            addLog(`📂 Рабочая директория: ${process.cwd()}`);
+            addLog(`🔗 URL Supabase: ${process.env.SUPABASE_URL ? 'настроен' : 'НЕ НАСТРОЕН'}`);
+            addLog(`🔑 API ключ Worksection: ${process.env.WORKSECTION_HASH ? 'настроен' : 'НЕ НАСТРОЕН'}`);
+            addLog(`🌐 Домен Worksection: ${process.env.WORKSECTION_DOMAIN ? 'настроен' : 'НЕ НАСТРОЕН'}`);
+            addLog('');
+            
+            // Расширенная проверка конфигурации
+            addLog('🔍 Валидация конфигурации системы...');
+            const configValidation = validateConfiguration();
+            
+            if (configValidation.errors.length > 0) {
+                configValidation.errors.forEach(error => addLog(`❌ ${error}`, 'error'));
+                throw new Error(`Критические ошибки конфигурации: ${configValidation.errors.join(', ')}`);
+            }
+            
+            if (configValidation.warnings.length > 0) {
+                addLog('⚠️ Предупреждения конфигурации:');
+                configValidation.warnings.forEach(warning => {
+                    addLog(`  ⚠️ ${warning}`);
+                    warnings.push(warning);
+                });
+                addLog('');
+            } else {
+                addLog('✅ Конфигурация корректна');
+            }
+            
+            // Проверка доступности API
+            const apiAvailable = await checkAPIAvailability();
+            if (!apiAvailable) {
+                throw new Error('API недоступны - проверьте сетевое соединение и настройки');
+            }
+            
+            addLog('');
+            
+            // 1. Синхронизация проектов (обязательно первая)
+            addLog('🏢 ЭТАП 1/4: Синхронизация проектов...');
+            try {
+                results.projects = await executeWithRetry(
+                    () => syncProjectsToSupabase(),
+                    'Синхронизация проектов'
+                );
+                
+                const projectStats = collectStats(results.projects, 'Project');
+                totalCreated += projectStats.created;
+                totalUpdated += projectStats.updated;
+                totalUnchanged += projectStats.unchanged;
+                totalErrors += projectStats.errors;
+                
+                addLog(`✅ Проекты: создано ${projectStats.created}, обновлено ${projectStats.updated}, без изменений ${projectStats.unchanged}, ошибок ${projectStats.errors}`);
+                
+                logDetailedResults(results.projects, 'Project', projectStats);
+                
+                if (projectStats.created === 0 && projectStats.updated === 0 && projectStats.unchanged === 0) {
+                    warnings.push('Не найдено проектов для синхронизации - проверьте метку "eneca.work sync"');
+                }
+                
+            } catch (error) {
+                addLog(`❌ Критическая ошибка проектов: ${error.message}`, 'error');
+                totalErrors++;
+                criticalErrors.push(`Проекты: ${error.message}`);
+                
+                // Если проекты не синхронизировались, можем продолжить с существующими
+                addLog('⚠️ Продолжаем с существующими проектами в БД...');
+            }
+            
+            addLog('');
+            
+            // 2. Синхронизация стадий
+            addLog('🎯 ЭТАП 2/4: Синхронизация стадий...');
+            try {
+                results.stages = await executeWithRetry(
+                    () => syncStagesFromWorksection(),
+                    'Синхронизация стадий'
+                );
+                
+                const stageStats = collectStats(results.stages, 'Stage');
+                totalCreated += stageStats.created;
+                totalUpdated += stageStats.updated;
+                totalUnchanged += stageStats.unchanged;
+                totalErrors += stageStats.errors;
+                
+                addLog(`✅ Стадии: создано ${stageStats.created}, обновлено ${stageStats.updated}, без изменений ${stageStats.unchanged}, ошибок ${stageStats.errors}`);
+                
+                logDetailedResults(results.stages, 'Stage', stageStats);
+                
+                if (stageStats.created === 0 && stageStats.updated === 0 && stageStats.unchanged === 0) {
+                    warnings.push('Не найдено стадий для синхронизации - проверьте метки проектов');
+                }
+                
+            } catch (error) {
+                addLog(`❌ Критическая ошибка стадий: ${error.message}`, 'error');
+                totalErrors++;
+                criticalErrors.push(`Стадии: ${error.message}`);
+            }
+            
+            addLog('');
+            
+            // 3. Синхронизация объектов
+            addLog('📦 ЭТАП 3/4: Синхронизация объектов...');
+            try {
+                results.objects = await executeWithRetry(
+                    () => syncObjectsFromWorksection(),
+                    'Синхронизация объектов'
+                );
+                
+                const objectStats = collectStats(results.objects, 'Object');
+                totalCreated += objectStats.created;
+                totalUpdated += objectStats.updated;
+                totalUnchanged += objectStats.unchanged;
+                totalErrors += objectStats.errors;
+                
+                addLog(`✅ Объекты: создано ${objectStats.created}, обновлено ${objectStats.updated}, без изменений ${objectStats.unchanged}, ошибок ${objectStats.errors}`);
+                
+                logDetailedResults(results.objects, 'Object', objectStats);
+                
+                if (objectStats.created === 0 && objectStats.updated === 0 && objectStats.unchanged === 0) {
+                    warnings.push('Не найдено объектов для синхронизации - проверьте задачи в проектах');
+                }
+                
+            } catch (error) {
+                addLog(`❌ Критическая ошибка объектов: ${error.message}`, 'error');
+                totalErrors++;
+            }
+            
+            addLog('');
+            
+            // 4. Синхронизация разделов
+            addLog('📑 ЭТАП 4/4: Синхронизация разделов...');
+            try {
+                results.sections = await executeWithRetry(
+                    () => syncSectionsFromWorksection(),
+                    'Синхронизация разделов'
+                );
+                
+                const sectionStats = collectStats(results.sections, 'Section');
+                totalCreated += sectionStats.created;
+                totalUpdated += sectionStats.updated;
+                totalUnchanged += sectionStats.unchanged;
+                totalErrors += sectionStats.errors;
+                
+                addLog(`✅ Разделы: создано ${sectionStats.created}, обновлено ${sectionStats.updated}, без изменений ${sectionStats.unchanged}, ошибок ${sectionStats.errors}`);
+                
+                logDetailedResults(results.sections, 'Section', sectionStats);
+                
+                if (sectionStats.created === 0 && sectionStats.updated === 0 && sectionStats.unchanged === 0) {
+                    warnings.push('Не найдено разделов для синхронизации - проверьте подзадачи');
+                }
+                
+            } catch (error) {
+                addLog(`❌ Критическая ошибка разделов: ${error.message}`, 'error');
+                totalErrors++;
+            }
+            
+            // Итоговая статистика и анализ
+            const duration = Date.now() - startTime;
+            const durationSeconds = (duration / 1000).toFixed(1);
+            const totalOperations = totalCreated + totalUpdated + totalUnchanged + totalErrors;
+            
+            addLog('');
+            addLog('🏁 === ЗАВЕРШЕНИЕ ПОЛНОЙ СИНХРОНИЗАЦИИ ===');
+            addLog(`⏱️ Общее время выполнения: ${durationSeconds} сек`);
+            addLog(`📊 Всего операций: ${totalOperations}`);
+            addLog(`🆕 Всего создано: ${totalCreated}`);
+            addLog(`🔄 Всего обновлено: ${totalUpdated}`);
+            addLog(`✅ Без изменений: ${totalUnchanged}`);
+            addLog(`❌ Всего ошибок: ${totalErrors}`);
+            
+            // Анализ производительности
+            if (totalOperations > 0) {
+                const operationsPerSecond = (totalOperations / (duration / 1000)).toFixed(1);
+                addLog(`⚡ Производительность: ${operationsPerSecond} операций/сек`);
+                
+                // Анализ производительности с рекомендациями
+                if (operationsPerSecond < 5) {
+                    warnings.push('Низкая производительность синхронизации - проверьте сетевое соединение');
+                } else if (operationsPerSecond > 50) {
+                    addLog('🚀 Отличная производительность синхронизации!');
+                }
+            }
+            
+            // Постпроверка целостности данных после синхронизации
+            addLog('');
+            addLog('🔍 ПОСТПРОВЕРКА ЦЕЛОСТНОСТИ ДАННЫХ...');
+            try {
+                // Подключаем функции диагностики
+                const { validateHierarchyConsistency } = require('../functions/projects');
+                
+                const hierarchyCheck = await validateHierarchyConsistency();
+                if (hierarchyCheck.success && hierarchyCheck.data) {
+                    const data = hierarchyCheck.data;
+                    const issues = (data.orphaned_stages?.length || 0) + 
+                                   (data.orphaned_objects?.length || 0) + 
+                                   (data.orphaned_sections?.length || 0) + 
+                                   (data.duplicate_external_ids?.length || 0);
+                    
+                    if (issues === 0) {
+                        addLog('✅ Целостность данных подтверждена - orphaned записей не найдено');
+                    } else {
+                        addLog(`⚠️ Обнаружено проблем целостности: ${issues}`);
+                        if (data.orphaned_stages?.length > 0) {
+                            addLog(`  📝 Orphaned стадий: ${data.orphaned_stages.length}`);
+                        }
+                        if (data.orphaned_objects?.length > 0) {
+                            addLog(`  📦 Orphaned объектов: ${data.orphaned_objects.length}`);
+                        }
+                        if (data.orphaned_sections?.length > 0) {
+                            addLog(`  📑 Orphaned разделов: ${data.orphaned_sections.length}`);
+                        }
+                        if (data.duplicate_external_ids?.length > 0) {
+                            addLog(`  🔄 Дубликатов external_id: ${data.duplicate_external_ids.length}`);
+                        }
+                        warnings.push('Найдены проблемы целостности данных - рекомендуется очистка');
+                    }
+                } else {
+                    addLog('⚠️ Ошибка проверки целостности данных');
+                    warnings.push('Не удалось проверить целостность данных');
+                }
+            } catch (error) {
+                addLog(`⚠️ Ошибка постпроверки: ${error.message}`);
+                warnings.push('Не удалось выполнить постпроверку целостности');
+            }
+            
+            // Генерация рекомендаций по улучшению
+            addLog('');
+            addLog('💡 РЕКОМЕНДАЦИИ ПО УЛУЧШЕНИЮ:');
+            
+            const recommendations = [];
+            
+            // Рекомендации по производительности
+            if (totalOperations > 0 && (totalOperations / (duration / 1000)) < 10) {
+                recommendations.push('Рассмотрите увеличение SYNC_BATCH_SIZE для улучшения производительности');
+            }
+            
+            // Рекомендации по ошибкам
+            if (totalErrors > 0) {
+                recommendations.push('Проверьте логи ошибок и устраните проблемы перед следующей синхронизацией');
+            }
+            
+            // Рекомендации по данным
+            if (totalCreated === 0 && totalUpdated === 0) {
+                recommendations.push('Убедитесь, что проекты в Worksection имеют метку "eneca.work sync"');
+            }
+            
+            if (recommendations.length > 0) {
+                recommendations.forEach((rec, index) => {
+                    addLog(`  ${index + 1}. ${rec}`);
+                });
+            } else {
+                addLog('  ✨ Система работает оптимально, рекомендаций нет');
+            }
+            
+            // Вывод предупреждений
+            if (warnings.length > 0) {
+                addLog('');
+                addLog('⚠️ ПРЕДУПРЕЖДЕНИЯ:');
+                warnings.forEach((warning, index) => {
+                    addLog(`  ${index + 1}. ${warning}`);
+                });
+            }
+            
+            // Вывод критических ошибок
+            if (criticalErrors.length > 0) {
+                addLog('');
+                addLog('🚨 КРИТИЧЕСКИЕ ОШИБКИ:');
+                criticalErrors.forEach((error, index) => {
+                    addLog(`  ${index + 1}. ${error}`);
+                });
+            }
+            
+            addLog(`⏰ Время завершения: ${new Date().toLocaleString('ru-RU')}`);
+            
+            const success = totalErrors === 0 && criticalErrors.length === 0;
+            const hasWarnings = warnings.length > 0;
+            
+            if (success && !hasWarnings) {
+                addLog('🎉 ПОЛНАЯ СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА УСПЕШНО!');
+            } else if (success && hasWarnings) {
+                addLog('✅ ПОЛНАЯ СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА УСПЕШНО С ПРЕДУПРЕЖДЕНИЯМИ');
+            } else {
+                addLog('⚠️ ПОЛНАЯ СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА С ОШИБКАМИ');
+            }
+            
+            // Создание структурированного отчёта
+            const report = {
                 success,
                 duration: durationSeconds,
                 summary: {
+                    total_operations: totalOperations,
                     created: totalCreated,
                     updated: totalUpdated,
+                    unchanged: totalUnchanged,
                     errors: totalErrors,
-                    total_operations: totalCreated + totalUpdated + totalErrors
+                    warnings: warnings.length,
+                    critical_errors: criticalErrors.length,
+                    performance: totalOperations > 0 ? 
+                        parseFloat((totalOperations / (duration / 1000)).toFixed(1)) : 0
                 },
-                details: results,
+                details: {
+                    projects: results.projects,
+                    stages: results.stages,
+                    objects: results.objects,
+                    sections: results.sections
+                },
+                issues: {
+                    warnings,
+                    critical_errors: criticalErrors
+                },
                 logs,
-                timestamp: new Date().toISOString()
+                detailed_logs: detailedLogs,
+                metadata: {
+                    timestamp: new Date().toISOString(),
+                    duration_ms: duration,
+                    environment: {
+                        platform: process.platform,
+                        node_version: process.version,
+                        working_directory: process.cwd()
+                    },
+                    configuration: {
+                        supabase_configured: !!process.env.SUPABASE_URL,
+                        worksection_configured: !!process.env.WORKSECTION_HASH,
+                        retry_attempts: 3
+                    }
+                }
             };
             
+            return report;
+            
         } catch (error) {
-            logs.push(`❌ КРИТИЧЕСКАЯ ОШИБКА ПОЛНОЙ СИНХРОНИЗАЦИИ: ${error.message}`);
+            const duration = Date.now() - startTime;
+            const durationSeconds = (duration / 1000).toFixed(1);
+            
+            addLog(`❌ КРИТИЧЕСКАЯ ОШИБКА ПОЛНОЙ СИНХРОНИЗАЦИИ: ${error.message}`, 'error');
+            criticalErrors.push(`Общая ошибка: ${error.message}`);
             
             return {
                 success: false,
                 error: error.message,
-                duration: (Date.now() - startTime) / 1000,
+                duration: durationSeconds,
                 summary: {
+                    total_operations: totalCreated + totalUpdated + totalUnchanged + totalErrors + 1,
                     created: totalCreated,
                     updated: totalUpdated,
+                    unchanged: totalUnchanged,
                     errors: totalErrors + 1,
-                    total_operations: totalCreated + totalUpdated + totalErrors + 1
+                    warnings: warnings.length,
+                    critical_errors: criticalErrors.length,
+                    performance: 0
                 },
                 details: results,
+                issues: {
+                    warnings,
+                    critical_errors: criticalErrors
+                },
                 logs,
-                timestamp: new Date().toISOString()
+                detailed_logs: detailedLogs,
+                metadata: {
+                    timestamp: new Date().toISOString(),
+                    duration_ms: duration,
+                    environment: {
+                        platform: process.platform,
+                        node_version: process.version,
+                        working_directory: process.cwd()
+                    },
+                    configuration: {
+                        supabase_configured: !!process.env.SUPABASE_URL,
+                        worksection_configured: !!process.env.WORKSECTION_HASH,
+                        retry_attempts: 3
+                    }
+                }
             };
         }
     }
