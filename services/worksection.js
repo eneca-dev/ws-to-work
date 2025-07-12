@@ -50,7 +50,21 @@ class WorksectionService {
   
   async getProjects() {
     const data = await this.request('get_projects');
-    return data.data || [];
+    const projects = data.data || [];
+    
+    // Отладочная информация о первом проекте
+    if (projects.length > 0) {
+      const firstProject = projects[0];
+      logger.info(`Sample project structure: ${JSON.stringify({
+        id: firstProject.id,
+        name: firstProject.name,
+        tags: firstProject.tags,
+        tagsType: typeof firstProject.tags,
+        isArray: Array.isArray(firstProject.tags)
+      })}`);
+    }
+    
+    return projects;
   }
   
   async getProjectTasks(projectId) {
@@ -63,9 +77,28 @@ class WorksectionService {
   
   async getProjectsWithTag(tagName = 'eneca.work sync') {
     const projects = await this.getProjects();
-    return projects.filter(project => 
-      project.tags && project.tags.includes(tagName)
-    );
+    return projects.filter(project => {
+      if (!project.tags) return false;
+      
+      // Если tags - массив
+      if (Array.isArray(project.tags)) {
+        return project.tags.includes(tagName);
+      }
+      
+      // Если tags - строка
+      if (typeof project.tags === 'string') {
+        return project.tags.includes(tagName);
+      }
+      
+      // Если tags - объект, проверяем его свойства
+      if (typeof project.tags === 'object') {
+        return Object.values(project.tags).some(tag => 
+          tag && tag.toString().includes(tagName)
+        );
+      }
+      
+      return false;
+    });
   }
   
   async getProjectTags() {
