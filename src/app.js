@@ -752,19 +752,64 @@ class WSToWorkApp {
         
         // Функция для сбора статистики
         const collectStats = (result, entityType) => {
+            // Добавляем отладочное логирование
+            addLog(`🔍 Сбор статистики для ${entityType}: ${JSON.stringify({
+                success: result?.success,
+                hasSummary: !!result?.summary,
+                hasData: !!result?.data,
+                hasAssignmentStats: !!result?.assignment_stats,
+                summaryKeys: result?.summary ? Object.keys(result.summary) : [],
+                dataKeys: result?.data ? Object.keys(result.data) : []
+            })}`);
+            
             if (!validateSyncResult(result, entityType)) {
-                return { created: 0, updated: 0, unchanged: 0, errors: 1 };
+                addLog(`⚠️ Валидация не прошла для ${entityType}, используем значения по умолчанию`);
+                return { 
+                    created: 0, 
+                    updated: 0, 
+                    unchanged: 0, 
+                    errors: 1,
+                    assignment_stats: {
+                        attempted: 0,
+                        successful: 0,
+                        failed: 0,
+                        skipped: 0
+                    }
+                };
             }
             
             const summary = result.summary || {};
             const data = result.data || {};
             
-            return {
+            const stats = {
                 created: summary.created || data.created?.length || 0,
                 updated: summary.updated || data.updated?.length || 0,
                 unchanged: summary.unchanged || data.unchanged?.length || 0,
+                deleted: summary.deleted || data.deleted?.length || 0,
                 errors: summary.errors || data.errors?.length || 0
             };
+            
+            // Добавляем статистику назначений ответственных
+            if (result.assignment_stats) {
+                stats.assignment_stats = {
+                    attempted: result.assignment_stats.attempted || 0,
+                    successful: result.assignment_stats.successful || 0,
+                    failed: result.assignment_stats.failed || 0,
+                    skipped: result.assignment_stats.skipped || 0
+                };
+                
+                addLog(`📊 Статистика ${entityType}: создано ${stats.created}, обновлено ${stats.updated}, без изменений ${stats.unchanged}, удалено ${stats.deleted}, ошибок ${stats.errors}`);
+                addLog(`👤 Назначения ответственных: попыток ${stats.assignment_stats.attempted}, успешных ${stats.assignment_stats.successful}, неудачных ${stats.assignment_stats.failed}, пропущено ${stats.assignment_stats.skipped}`);
+                
+                if (stats.assignment_stats.attempted > 0) {
+                    const successRate = (stats.assignment_stats.successful / stats.assignment_stats.attempted * 100).toFixed(1);
+                    addLog(`📈 Процент успешных назначений ${entityType}: ${successRate}%`);
+                }
+            } else {
+                addLog(`📊 Статистика ${entityType}: создано ${stats.created}, обновлено ${stats.updated}, без изменений ${stats.unchanged}, удалено ${stats.deleted}, ошибок ${stats.errors}`);
+            }
+            
+            return stats;
         };
         
         // Функция для детального логирования результатов
@@ -957,7 +1002,7 @@ class WSToWorkApp {
                 totalUnchanged += projectStats.unchanged;
                 totalErrors += projectStats.errors;
                 
-                addLog(`✅ Проекты: создано ${projectStats.created}, обновлено ${projectStats.updated}, без изменений ${projectStats.unchanged}, ошибок ${projectStats.errors}`);
+                addLog(`✅ Проекты: создано ${projectStats.created}, обновлено ${projectStats.updated}, без изменений ${projectStats.unchanged}, удалено ${projectStats.deleted || 0}, ошибок ${projectStats.errors}`);
                 
                 logDetailedResults(results.projects, 'Project', projectStats);
                 
@@ -990,7 +1035,7 @@ class WSToWorkApp {
                 totalUnchanged += stageStats.unchanged;
                 totalErrors += stageStats.errors;
                 
-                addLog(`✅ Стадии: создано ${stageStats.created}, обновлено ${stageStats.updated}, без изменений ${stageStats.unchanged}, ошибок ${stageStats.errors}`);
+                addLog(`✅ Стадии: создано ${stageStats.created}, обновлено ${stageStats.updated}, без изменений ${stageStats.unchanged}, удалено ${stageStats.deleted || 0}, ошибок ${stageStats.errors}`);
                 
                 logDetailedResults(results.stages, 'Stage', stageStats);
                 
@@ -1020,7 +1065,7 @@ class WSToWorkApp {
                 totalUnchanged += objectStats.unchanged;
                 totalErrors += objectStats.errors;
                 
-                addLog(`✅ Объекты: создано ${objectStats.created}, обновлено ${objectStats.updated}, без изменений ${objectStats.unchanged}, ошибок ${objectStats.errors}`);
+                addLog(`✅ Объекты: создано ${objectStats.created}, обновлено ${objectStats.updated}, без изменений ${objectStats.unchanged}, удалено ${objectStats.deleted || 0}, ошибок ${objectStats.errors}`);
                 
                 logDetailedResults(results.objects, 'Object', objectStats);
                 
@@ -1049,7 +1094,7 @@ class WSToWorkApp {
                 totalUnchanged += sectionStats.unchanged;
                 totalErrors += sectionStats.errors;
                 
-                addLog(`✅ Разделы: создано ${sectionStats.created}, обновлено ${sectionStats.updated}, без изменений ${sectionStats.unchanged}, ошибок ${sectionStats.errors}`);
+                addLog(`✅ Разделы: создано ${sectionStats.created}, обновлено ${sectionStats.updated}, без изменений ${sectionStats.unchanged}, удалено ${sectionStats.deleted || 0}, ошибок ${sectionStats.errors}`);
                 
                 logDetailedResults(results.sections, 'Section', sectionStats);
                 
@@ -1067,6 +1112,31 @@ class WSToWorkApp {
             const durationSeconds = (duration / 1000).toFixed(1);
             const totalOperations = totalCreated + totalUpdated + totalUnchanged + totalErrors;
             
+            // Сбор общей статистики назначений ответственных
+            const totalAssignmentStats = {
+                attempted: 0,
+                successful: 0,
+                failed: 0,
+                skipped: 0
+            };
+            
+            // Собираем статистику назначений из всех модулей
+            const statsModules = [
+                { name: 'Проекты', stats: collectStats(results.projects, 'Project') },
+                { name: 'Стадии', stats: collectStats(results.stages, 'Stage') },
+                { name: 'Объекты', stats: collectStats(results.objects, 'Object') },
+                { name: 'Разделы', stats: collectStats(results.sections, 'Section') }
+            ];
+            
+            statsModules.forEach(module => {
+                if (module.stats.assignment_stats) {
+                    totalAssignmentStats.attempted += module.stats.assignment_stats.attempted;
+                    totalAssignmentStats.successful += module.stats.assignment_stats.successful;
+                    totalAssignmentStats.failed += module.stats.assignment_stats.failed;
+                    totalAssignmentStats.skipped += module.stats.assignment_stats.skipped;
+                }
+            });
+            
             addLog('');
             addLog('🏁 === ЗАВЕРШЕНИЕ ПОЛНОЙ СИНХРОНИЗАЦИИ ===');
             addLog(`⏱️ Общее время выполнения: ${durationSeconds} сек`);
@@ -1075,6 +1145,45 @@ class WSToWorkApp {
             addLog(`🔄 Всего обновлено: ${totalUpdated}`);
             addLog(`✅ Без изменений: ${totalUnchanged}`);
             addLog(`❌ Всего ошибок: ${totalErrors}`);
+            
+            // Отображаем общую статистику назначений ответственных
+            if (totalAssignmentStats.attempted > 0) {
+                addLog('');
+                addLog('👤 === ОБЩАЯ СТАТИСТИКА НАЗНАЧЕНИЙ ОТВЕТСТВЕННЫХ ===');
+                addLog(`🎯 Всего попыток назначения: ${totalAssignmentStats.attempted}`);
+                addLog(`✅ Успешных назначений: ${totalAssignmentStats.successful}`);
+                addLog(`❌ Неудачных назначений: ${totalAssignmentStats.failed}`);
+                addLog(`⚠️ Пропущено (нет данных): ${totalAssignmentStats.skipped}`);
+                
+                const totalAssignmentSuccessRate = (totalAssignmentStats.successful / totalAssignmentStats.attempted * 100).toFixed(1);
+                addLog(`📊 Общий процент успешных назначений: ${totalAssignmentSuccessRate}%`);
+                
+                // Анализ качества назначений
+                if (totalAssignmentSuccessRate >= 90) {
+                    addLog('🎉 Отличное качество назначений ответственных!');
+                } else if (totalAssignmentSuccessRate >= 70) {
+                    addLog('✅ Хорошее качество назначений ответственных');
+                } else if (totalAssignmentSuccessRate >= 50) {
+                    addLog('⚠️ Среднее качество назначений - рекомендуется проверка данных');
+                    warnings.push('Много неудачных назначений ответственных - проверьте соответствие пользователей');
+                } else {
+                    addLog('❌ Низкое качество назначений - критические проблемы');
+                    warnings.push('Критически мало успешных назначений ответственных - требуется аудит пользователей');
+                }
+                
+                // Детальная разбивка по модулям
+                addLog('');
+                addLog('📋 Детализация по модулям:');
+                statsModules.forEach(module => {
+                    if (module.stats.assignment_stats && module.stats.assignment_stats.attempted > 0) {
+                        const moduleSuccessRate = (module.stats.assignment_stats.successful / module.stats.assignment_stats.attempted * 100).toFixed(1);
+                        addLog(`  📌 ${module.name}: ${module.stats.assignment_stats.successful}/${module.stats.assignment_stats.attempted} (${moduleSuccessRate}%)`);
+                    }
+                });
+            } else {
+                addLog('');
+                addLog('👤 Назначений ответственных не выполнялось');
+            }
             
             // Анализ производительности
             if (totalOperations > 0) {
@@ -1142,6 +1251,16 @@ class WSToWorkApp {
                 recommendations.push('Рассмотрите увеличение SYNC_BATCH_SIZE для улучшения производительности');
             }
             
+            // Рекомендации по назначениям ответственных
+            if (totalAssignmentStats.attempted > 0) {
+                if (totalAssignmentStats.failed > totalAssignmentStats.successful) {
+                    recommendations.push('Проверьте соответствие пользователей между Worksection и eneca.work');
+                }
+                if (totalAssignmentStats.skipped > totalAssignmentStats.attempted * 0.3) {
+                    recommendations.push('Рассмотрите назначение ответственных в Worksection для повышения качества данных');
+                }
+            }
+            
             // Рекомендации по ошибкам
             if (totalErrors > 0) {
                 recommendations.push('Проверьте логи ошибок и устраните проблемы перед следующей синхронизацией');
@@ -1206,6 +1325,7 @@ class WSToWorkApp {
                     performance: totalOperations > 0 ? 
                         parseFloat((totalOperations / (duration / 1000)).toFixed(1)) : 0
                 },
+                assignment_stats: totalAssignmentStats,
                 details: {
                     projects: results.projects,
                     stages: results.stages,

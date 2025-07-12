@@ -760,7 +760,21 @@ async function getSupabaseProjectsWithExternalId() {
  * Согласно маппингу: Worksection Project → Manager + Project
  */
 async function createProjectInSupabase(wsProject) {
-    console.log(`📝 Создание проекта в Supabase: ${wsProject.name}`);
+    console.log(`\n📝 === СОЗДАНИЕ ПРОЕКТА В SUPABASE ===`);
+    console.log(`📋 Проект: "${wsProject.name}" (ID: ${wsProject.id})`);
+    
+    // Статистика назначений для этого проекта
+    const assignmentStats = {
+        project_name: wsProject.name,
+        project_id: wsProject.id,
+        manager_assignment: {
+            attempted: false,
+            success: false,
+            manager_data: null,
+            found_user: null,
+            error: null
+        }
+    };
     
     // Создаем проект напрямую без Manager'ов (так как их нет в БД)
     const projectData = {
@@ -774,20 +788,75 @@ async function createProjectInSupabase(wsProject) {
     
     // Ищем и назначаем ответственного за проект (project_manager)
     if (wsProject.manager_name) {
-        console.log(`👤 Ищем ответственного за проект: ${wsProject.manager_name}`);
-        const foundUser = await findUserByName(wsProject.manager_name, wsProject.manager_email);
-        if (foundUser) {
-            projectData.project_manager = foundUser.user_id;
-            console.log(`✅ Назначен ответственный: ${foundUser.full_name} (ID: ${foundUser.user_id})`);
-        } else {
-            console.log(`⚠️ Ответственный не найден в базе: ${wsProject.manager_name}`);
+        assignmentStats.manager_assignment.attempted = true;
+        assignmentStats.manager_assignment.manager_data = {
+            name: wsProject.manager_name,
+            email: wsProject.manager_email
+        };
+        
+        console.log(`\n👤 === НАЗНАЧЕНИЕ ОТВЕТСТВЕННОГО ЗА ПРОЕКТ ===`);
+        console.log(`📋 Проект: "${wsProject.name}"`);
+        console.log(`👤 Ищем ответственного: "${wsProject.manager_name}"`);
+        console.log(`📧 Email: ${wsProject.manager_email || 'не указан'}`);
+        
+        try {
+            const foundUser = await findUserByName(wsProject.manager_name, wsProject.manager_email);
+            if (foundUser) {
+                projectData.project_manager = foundUser.user_id;
+                assignmentStats.manager_assignment.success = true;
+                assignmentStats.manager_assignment.found_user = {
+                    user_id: foundUser.user_id,
+                    full_name: foundUser.full_name,
+                    email: foundUser.email
+                };
+                
+                console.log(`✅ УСПЕХ: Назначен ответственный за проект`);
+                console.log(`   👤 Пользователь: ${foundUser.full_name}`);
+                console.log(`   📧 Email: ${foundUser.email}`);
+                console.log(`   🆔 ID: ${foundUser.user_id}`);
+                
+            } else {
+                assignmentStats.manager_assignment.success = false;
+                assignmentStats.manager_assignment.error = 'Пользователь не найден в базе';
+                
+                console.log(`❌ НЕУДАЧА: Ответственный не найден в базе`);
+                console.log(`   👤 Искали: "${wsProject.manager_name}"`);
+                console.log(`   📧 Email: ${wsProject.manager_email || 'не указан'}`);
+                console.log(`   ⚠️ Проект будет создан без ответственного`);
+            }
+        } catch (error) {
+            assignmentStats.manager_assignment.success = false;
+            assignmentStats.manager_assignment.error = error.message;
+            
+            console.log(`❌ ОШИБКА: Ошибка при поиске ответственного`);
+            console.log(`   👤 Искали: "${wsProject.manager_name}"`);
+            console.log(`   📧 Email: ${wsProject.manager_email || 'не указан'}`);
+            console.log(`   ❌ Ошибка: ${error.message}`);
         }
+        
+        console.log(`=== КОНЕЦ НАЗНАЧЕНИЯ ОТВЕТСТВЕННОГО ===\n`);
+    } else {
+        console.log(`⚠️ Менеджер не указан в данных Worksection для проекта "${wsProject.name}"`);
     }
     
     // Создаем проект в Supabase
+    console.log(`💾 Создание записи проекта в БД...`);
     const newProject = await createProject(projectData);
     
-    console.log(`✅ Проект создан: ${newProject.project_name} (ID: ${newProject.project_id})`);
+    // Итоговая статистика
+    console.log(`\n📊 === ИТОГОВАЯ СТАТИСТИКА СОЗДАНИЯ ПРОЕКТА ===`);
+    console.log(`📋 Проект: "${newProject.project_name}" (ID: ${newProject.project_id})`);
+    console.log(`👤 Назначение ответственного:`);
+    if (assignmentStats.manager_assignment.attempted) {
+        if (assignmentStats.manager_assignment.success) {
+            console.log(`   ✅ УСПЕХ: ${assignmentStats.manager_assignment.found_user.full_name}`);
+        } else {
+            console.log(`   ❌ НЕУДАЧА: ${assignmentStats.manager_assignment.error}`);
+        }
+    } else {
+        console.log(`   ⚠️ НЕ ВЫПОЛНЯЛОСЬ: Менеджер не указан в Worksection`);
+    }
+    console.log(`=== КОНЕЦ СОЗДАНИЯ ПРОЕКТА ===\n`);
     
     return newProject;
 }
@@ -812,7 +881,20 @@ function mapWorksectionStatus(wsStatus) {
  */
 async function updateProjectsFromWorksection() {
     try {
+        console.log(`\n🔄 === ОБНОВЛЕНИЕ ПРОЕКТОВ ИЗ WORKSECTION ===`);
         console.log('🔄 Начинаем обновление проектов...');
+        
+        // Статистика назначений для всех проектов
+        const globalAssignmentStats = {
+            total_projects: 0,
+            manager_assignments: {
+                attempted: 0,
+                successful: 0,
+                failed: 0,
+                skipped: 0,
+                details: []
+            }
+        };
         
         // 1. Получаем проекты с sync тегом из Worksection
         const wsProjectsResponse = await getProjectsWithSyncTag();
@@ -821,6 +903,7 @@ async function updateProjectsFromWorksection() {
         }
         
         const wsProjects = wsProjectsResponse.data;
+        globalAssignmentStats.total_projects = wsProjects.length;
         console.log(`📋 Найдено ${wsProjects.length} проектов в Worksection с sync тегом`);
         
         // 2. Получаем проекты из Supabase с external_id
@@ -836,7 +919,8 @@ async function updateProjectsFromWorksection() {
         // 3. Обрабатываем каждый проект из Worksection
         for (const wsProject of wsProjects) {
             try {
-                console.log(`🔍 Обрабатываем проект: ${wsProject.name} (ID: ${wsProject.id})`);
+                console.log(`\n🔍 === ОБРАБОТКА ПРОЕКТА ===`);
+                console.log(`📋 Проект: "${wsProject.name}" (ID: ${wsProject.id})`);
                 
                 // Ищем проект по external_id
                 const existingProject = supabaseProjects.find(
@@ -862,6 +946,19 @@ async function updateProjectsFromWorksection() {
                 // Создаем детальный лог изменений для этого проекта
                 const projectChanges = [];
                 
+                // Статистика назначений для этого проекта
+                const projectAssignmentStats = {
+                    project_name: wsProject.name,
+                    project_id: wsProject.id,
+                    manager_assignment: {
+                        attempted: false,
+                        success: false,
+                        old_manager: null,
+                        new_manager: null,
+                        error: null
+                    }
+                };
+                
                 // Проверяем изменение названия
                 if (existingProject.project_name !== wsProject.name) {
                     const nameChange = {
@@ -870,78 +967,115 @@ async function updateProjectsFromWorksection() {
                         new_value: wsProject.name
                     };
                     projectChanges.push(nameChange);
-                    console.log(`📝 [${wsProject.name}] Обновляем название: "${existingProject.project_name}" → "${wsProject.name}"`);
+                    console.log(`📝 Обновляем название: "${existingProject.project_name}" → "${wsProject.name}"`);
                     updateData.project_name = wsProject.name;
                     hasChanges = true;
                 }
                 
                 // Ищем менеджера проекта по имени и email (если есть в данных Worksection)
                 if (wsProject.manager_name) {
-                    console.log(`👤 [${wsProject.name}] Ищем менеджера: "${wsProject.manager_name}"${wsProject.manager_email ? ` (${wsProject.manager_email})` : ''}`);
-                    const foundManager = await findUserByName(wsProject.manager_name, wsProject.manager_email);
+                    projectAssignmentStats.manager_assignment.attempted = true;
+                    globalAssignmentStats.manager_assignments.attempted++;
                     
-                    if (foundManager) {
-                        if (existingProject.project_manager !== foundManager.user_id) {
-                            // Получаем текущего менеджера для детального лога
-                            let currentManagerName = 'Не назначен';
-                            if (existingProject.project_manager) {
-                                try {
-                                    const { getAllUsers } = require('./supabase-client');
-                                    const allUsers = await getAllUsers();
-                                    const currentManager = allUsers.find(u => u.user_id === existingProject.project_manager);
-                                    if (currentManager) {
-                                        currentManagerName = `${currentManager.first_name} ${currentManager.last_name}`.trim();
+                    console.log(`\n👤 === НАЗНАЧЕНИЕ МЕНЕДЖЕРА ПРОЕКТА ===`);
+                    console.log(`📋 Проект: "${wsProject.name}"`);
+                    console.log(`👤 Ищем менеджера: "${wsProject.manager_name}"`);
+                    console.log(`📧 Email: ${wsProject.manager_email || 'не указан'}`);
+                    
+                    try {
+                        const foundManager = await findUserByName(wsProject.manager_name, wsProject.manager_email);
+                        
+                        if (foundManager) {
+                            if (existingProject.project_manager !== foundManager.user_id) {
+                                // Получаем текущего менеджера для детального лога
+                                let currentManagerName = 'Не назначен';
+                                if (existingProject.project_manager) {
+                                    try {
+                                        const { getAllUsers } = require('./supabase-client');
+                                        const allUsers = await getAllUsers();
+                                        const currentManager = allUsers.find(u => u.user_id === existingProject.project_manager);
+                                        if (currentManager) {
+                                            currentManagerName = `${currentManager.first_name} ${currentManager.last_name}`.trim();
+                                        }
+                                    } catch (err) {
+                                        console.log(`⚠️ Не удалось получить имя текущего менеджера`);
                                     }
-                                } catch (err) {
-                                    console.log(`⚠️ [${wsProject.name}] Не удалось получить имя текущего менеджера`);
                                 }
+                                
+                                const managerChange = {
+                                    field: 'Менеджер проекта',
+                                    old_value: currentManagerName,
+                                    new_value: foundManager.full_name
+                                };
+                                projectChanges.push(managerChange);
+                                
+                                projectAssignmentStats.manager_assignment.success = true;
+                                projectAssignmentStats.manager_assignment.old_manager = currentManagerName;
+                                projectAssignmentStats.manager_assignment.new_manager = foundManager.full_name;
+                                globalAssignmentStats.manager_assignments.successful++;
+                                
+                                console.log(`✅ УСПЕХ: Обновляем менеджера проекта`);
+                                console.log(`   👤 Старый: "${currentManagerName}"`);
+                                console.log(`   👤 Новый: "${foundManager.full_name}" (ID: ${foundManager.user_id})`);
+                                console.log(`   📧 Email: ${foundManager.email}`);
+                                
+                                updateData.project_manager = foundManager.user_id;
+                                hasChanges = true;
+                            } else {
+                                projectAssignmentStats.manager_assignment.success = true;
+                                projectAssignmentStats.manager_assignment.old_manager = foundManager.full_name;
+                                projectAssignmentStats.manager_assignment.new_manager = foundManager.full_name;
+                                globalAssignmentStats.manager_assignments.successful++;
+                                
+                                console.log(`✅ УСПЕХ: Менеджер не изменился: ${foundManager.full_name}`);
                             }
-                            
-                            const managerChange = {
-                                field: 'Менеджер проекта',
-                                old_value: currentManagerName,
-                                new_value: foundManager.full_name
-                            };
-                            projectChanges.push(managerChange);
-                            console.log(`👤 [${wsProject.name}] Обновляем менеджера: "${currentManagerName}" → "${foundManager.full_name}" (ID: ${foundManager.user_id})`);
-                            updateData.project_manager = foundManager.user_id;
-                            hasChanges = true;
                         } else {
-                            console.log(`👤 [${wsProject.name}] Менеджер не изменился: ${foundManager.full_name}`);
+                            projectAssignmentStats.manager_assignment.success = false;
+                            projectAssignmentStats.manager_assignment.error = 'Менеджер не найден в Supabase';
+                            globalAssignmentStats.manager_assignments.failed++;
+                            
+                            console.log(`❌ НЕУДАЧА: Менеджер не найден в Supabase`);
+                            console.log(`   👤 Искали: "${wsProject.manager_name}"`);
+                            console.log(`   📧 Email: ${wsProject.manager_email || 'не указан'}`);
                         }
-                    } else {
-                        console.log(`⚠️ [${wsProject.name}] Менеджер не найден в Supabase: "${wsProject.manager_name}"`);
+                    } catch (error) {
+                        projectAssignmentStats.manager_assignment.success = false;
+                        projectAssignmentStats.manager_assignment.error = error.message;
+                        globalAssignmentStats.manager_assignments.failed++;
+                        
+                        console.log(`❌ ОШИБКА: Ошибка при поиске менеджера`);
+                        console.log(`   👤 Искали: "${wsProject.manager_name}"`);
+                        console.log(`   📧 Email: ${wsProject.manager_email || 'не указан'}`);
+                        console.log(`   ❌ Ошибка: ${error.message}`);
                     }
+                    
+                    console.log(`=== КОНЕЦ НАЗНАЧЕНИЯ МЕНЕДЖЕРА ===\n`);
+                    
                 } else {
-                    console.log(`⚠️ [${wsProject.name}] Менеджер не указан в Worksection`);
+                    globalAssignmentStats.manager_assignments.skipped++;
+                    console.log(`⚠️ Менеджер не указан в Worksection для проекта "${wsProject.name}"`);
                 }
                 
-                // Обновляем проект если есть изменения
+                // Сохраняем статистику назначений для этого проекта
+                globalAssignmentStats.manager_assignments.details.push(projectAssignmentStats);
+                
+                // Если есть изменения, обновляем проект
                 if (hasChanges) {
-                    console.log(`💾 [${wsProject.name}] Применяем ${projectChanges.length} изменений...`);
-                    projectChanges.forEach(change => {
-                        console.log(`   🔄 ${change.field}: "${change.old_value}" → "${change.new_value}"`);
-                    });
-                    
+                    console.log(`💾 Обновляем проект в БД...`);
                     const updatedProject = await updateProject(existingProject.project_id, updateData);
                     
-                    results.updated.push({
-                        wsProject,
-                        supabaseProject: existingProject,
-                        updatedProject,
-                        changes: projectChanges,
-                        updateData: updateData,
-                        status: 'updated'
-                    });
-                    
-                    console.log(`✅ [${wsProject.name}] Проект успешно обновлен`);
+                    if (updatedProject) {
+                        results.updated.push({
+                            project: updatedProject,
+                            wsProject,
+                            changes: projectChanges
+                        });
+                        console.log(`✅ Проект обновлен: "${wsProject.name}"`);
+                    } else {
+                        throw new Error(`Не удалось обновить проект "${wsProject.name}"`);
+                    }
                 } else {
-                    console.log(`✅ [${wsProject.name}] Проект актуален, изменений нет`);
-                    results.updated.push({
-                        wsProject,
-                        supabaseProject: existingProject,
-                        status: 'no_changes'
-                    });
+                    console.log(`ℹ️ Проект актуален, изменений нет: "${wsProject.name}"`);
                 }
                 
             } catch (error) {
@@ -953,65 +1087,52 @@ async function updateProjectsFromWorksection() {
             }
         }
         
-        console.log('🎉 Обновление завершено!');
+        // Итоговая статистика
+        console.log(`\n📊 === ИТОГОВАЯ СТАТИСТИКА ОБНОВЛЕНИЯ ПРОЕКТОВ ===`);
+        console.log(`📋 Всего проектов обработано: ${globalAssignmentStats.total_projects}`);
+        console.log(`✅ Обновлено проектов: ${results.updated.length}`);
+        console.log(`❌ Ошибок: ${results.errors.length}`);
+        console.log(`⚠️ Не найдено в Supabase: ${results.notFound.length}`);
         
-        // Подробная статистика
-        const actuallyUpdated = results.updated.filter(item => item.status === 'updated');
-        const noChanges = results.updated.filter(item => item.status === 'no_changes');
+        console.log(`\n👤 === СТАТИСТИКА НАЗНАЧЕНИЙ МЕНЕДЖЕРОВ ===`);
+        console.log(`🎯 Попыток назначения: ${globalAssignmentStats.manager_assignments.attempted}`);
+        console.log(`✅ Успешных назначений: ${globalAssignmentStats.manager_assignments.successful}`);
+        console.log(`❌ Неудачных назначений: ${globalAssignmentStats.manager_assignments.failed}`);
+        console.log(`⚠️ Пропущено (нет менеджера): ${globalAssignmentStats.manager_assignments.skipped}`);
         
-        console.log(`📊 Детальная статистика:`);
-        console.log(`   ✅ Всего проектов обработано: ${wsProjects.length}`);
-        console.log(`   🔄 Проектов обновлено: ${actuallyUpdated.length}`);
-        console.log(`   📋 Проектов без изменений: ${noChanges.length}`);
-        console.log(`   ❓ Проектов не найдено в Supabase: ${results.notFound.length}`);
-        console.log(`   ❌ Ошибок: ${results.errors.length}`);
+        if (globalAssignmentStats.manager_assignments.attempted > 0) {
+            const successRate = (globalAssignmentStats.manager_assignments.successful / globalAssignmentStats.manager_assignments.attempted * 100).toFixed(1);
+            console.log(`📊 Процент успешных назначений: ${successRate}%`);
+        }
         
-        // Показываем детали обновленных проектов
-        if (actuallyUpdated.length > 0) {
-            console.log(`\n📝 Обновленные проекты:`);
-            actuallyUpdated.forEach(item => {
-                console.log(`   📋 "${item.wsProject.name}"`);
-                if (item.changes && item.changes.length > 0) {
-                    item.changes.forEach(change => {
-                        console.log(`      🔄 ${change.field}: "${change.old_value}" → "${change.new_value}"`);
-                    });
-                }
+        // Показываем детали неудачных назначений
+        const failedAssignments = globalAssignmentStats.manager_assignments.details.filter(
+            detail => detail.manager_assignment.attempted && !detail.manager_assignment.success
+        );
+        
+        if (failedAssignments.length > 0) {
+            console.log(`\n⚠️ === ДЕТАЛИ НЕУДАЧНЫХ НАЗНАЧЕНИЙ ===`);
+            failedAssignments.forEach((detail, index) => {
+                console.log(`${index + 1}. 📋 Проект: "${detail.project_name}"`);
+                console.log(`   👤 Искали: "${detail.manager_assignment.old_manager || 'не указан'}"`);
+                console.log(`   ❌ Причина: ${detail.manager_assignment.error}`);
             });
         }
         
-        // Показываем проекты без изменений
-        if (noChanges.length > 0) {
-            console.log(`\n✅ Проекты без изменений:`);
-            noChanges.forEach(item => {
-                console.log(`   📋 "${item.wsProject.name}"`);
-            });
-        }
-        
-        // Показываем не найденные проекты
-        if (results.notFound.length > 0) {
-            console.log(`\n❓ Проекты не найдены в Supabase:`);
-            results.notFound.forEach(item => {
-                console.log(`   📋 "${item.wsProject.name}" (ID: ${item.wsProject.id})`);
-            });
-        }
-        
-        // Показываем ошибки
-        if (results.errors.length > 0) {
-            console.log(`\n❌ Ошибки:`);
-            results.errors.forEach(item => {
-                console.log(`   📋 "${item.wsProject.name}": ${item.error}`);
-            });
-        }
+        console.log(`=== КОНЕЦ ОБНОВЛЕНИЯ ПРОЕКТОВ ===\n`);
         
         return {
             success: true,
-            data: results,
             summary: {
-                total: wsProjects.length,
+                total: globalAssignmentStats.total_projects,
                 updated: results.updated.length,
                 notFound: results.notFound.length,
                 errors: results.errors.length
-            }
+            },
+            assignment_stats: globalAssignmentStats.manager_assignments,
+            updated: results.updated,
+            notFound: results.notFound,
+            errors: results.errors
         };
         
     } catch (error) {
@@ -1530,62 +1651,68 @@ async function syncObjectsFromWorksection() {
 }
 
 /**
- * Синхронизирует разделы из подзадач Worksection
+ * Синхронизирует разделы (sections) из подзадач Worksection
+ * С УЛУЧШЕННОЙ СТАТИСТИКОЙ назначений ответственных
  */
 async function syncSectionsFromWorksection() {
-    console.log('🚀 Начало синхронизации разделов из подзадач Worksection...');
-    
-    const results = {
-        created: [],
-        updated: [],
-        unchanged: [],
-        deleted: [],
-        errors: []
-    };
-    
     try {
+        console.log(`\n📑 === СИНХРОНИЗАЦИЯ РАЗДЕЛОВ ИЗ WORKSECTION ===`);
+        console.log('📑 Начинаем синхронизацию разделов из подзадач Worksection...');
+        
+        // Глобальная статистика назначений ответственных
+        const globalAssignmentStats = {
+            total_sections: 0,
+            responsible_assignments: {
+                attempted: 0,
+                successful: 0,
+                failed: 0,
+                skipped: 0,
+                details: []
+            }
+        };
+        
+        // Результаты синхронизации
+        const results = {
+            created: [],
+            updated: [],
+            unchanged: [],
+            skipped: [],
+            errors: []
+        };
+        
         // 1. Получаем проекты с sync тегом
-        console.log('🔍 Получение проектов с меткой sync...');
-        const wsProjectsResponse = await getProjectsWithSyncTag();
-        
-        if (!wsProjectsResponse.success || !wsProjectsResponse.data) {
-            console.log('❌ Не удалось получить проекты с sync тегом');
-            return { success: false, error: 'Не удалось получить проекты с sync тегом', data: results };
+        const wsProjectsResult = await getProjectsWithSyncTag();
+        if (!wsProjectsResult.success) {
+            throw new Error(`Ошибка получения проектов: ${wsProjectsResult.error}`);
         }
         
-        const wsProjects = wsProjectsResponse.data;
-        console.log(`✅ Найдено ${wsProjects.length} проектов с меткой sync`);
-        
-        if (wsProjects.length === 0) {
-            console.log('⚠️ Нет проектов с меткой sync для синхронизации');
-            return { success: true, data: results, summary: { created: 0, updated: 0, unchanged: 0, deleted: 0, errors: 0 } };
-        }
+        const wsProjects = wsProjectsResult.data;
+        console.log(`📊 Найдено ${wsProjects.length} проектов для синхронизации разделов`);
         
         // 2. Получаем существующие данные из Supabase
-        console.log('📋 Получение существующих данных из Supabase...');
-        const [existingObjects, existingSections] = await Promise.all([
-            getAllObjects(),
-            getAllSections()
-        ]);
+        const supabaseProjects = await getProjectsWithExternalId();
+        const existingObjects = await getAllObjects();
+        const existingSections = await getAllSections();
         
-        console.log(`📊 Загружено из Supabase:`);
-        console.log(`   📦 Объекты: ${existingObjects.length}`);
-        console.log(`   📑 Разделы: ${existingSections.length}`);
+        console.log(`📊 Найдено ${supabaseProjects.length} проектов в Supabase`);
+        console.log(`📊 Найдено ${existingObjects.length} объектов в Supabase`);
+        console.log(`📊 Найдено ${existingSections.length} разделов в Supabase`);
         
         // 3. Обрабатываем каждый проект с sync тегом
         for (const wsProject of wsProjects) {
-            console.log(`\n🔍 [${wsProject.name}] Обработка проекта...`);
+            console.log(`\n🔍 === ОБРАБОТКА ПРОЕКТА ДЛЯ РАЗДЕЛОВ ===`);
+            console.log(`📋 Проект: "${wsProject.name}"`);
             
             try {
                 // Получаем задачи проекта с подзадачами
-                console.log(`📋 [${wsProject.name}] Получение задач проекта с подзадачами...`);
+                console.log(`📋 Получение задач проекта с подзадачами...`);
                 const tasksResponse = await makeWorksectionRequest('get_tasks', {
                     id_project: wsProject.id,
                     extra: 'subtasks'  // ИСПРАВЛЕНИЕ: используем extra=subtasks
                 });
                 
                 if (tasksResponse.data.status !== 'ok') {
-                    console.log(`❌ [${wsProject.name}] Ошибка получения задач: ${tasksResponse.data.message}`);
+                    console.log(`❌ Ошибка получения задач: ${tasksResponse.data.message}`);
                     results.errors.push({
                         project: wsProject.name,
                         error: `Ошибка получения задач: ${tasksResponse.data.message}`
@@ -1594,7 +1721,7 @@ async function syncSectionsFromWorksection() {
                 }
                 
                 const allTasks = tasksResponse.data.data || [];
-                console.log(`📋 [${wsProject.name}] Найдено задач: ${allTasks.length}`);
+                console.log(`📋 Найдено задач: ${allTasks.length}`);
                 
                 // 4. Обрабатываем подзадачи каждой задачи
                 let taskCount = 0;
@@ -1605,7 +1732,7 @@ async function syncSectionsFromWorksection() {
                     
                     // Пропускаем неактивные задачи
                     if (wsTask.status !== 'active') {
-                        console.log(`⏭️ [${wsProject.name}] Пропуск неактивной задачи: "${wsTask.name}"`);
+                        console.log(`⏭️ Пропуск неактивной задачи: "${wsTask.name}"`);
                         continue;
                     }
                     
@@ -1615,138 +1742,274 @@ async function syncSectionsFromWorksection() {
                     );
                     
                     if (!parentObject) {
-                        console.log(`⚠️ [${wsProject.name}] Родительский объект не найден для задачи "${wsTask.name}" (ID: ${wsTask.id})`);
+                        console.log(`⚠️ Родительский объект не найден для задачи "${wsTask.name}" (ID: ${wsTask.id})`);
                         continue;
                     }
                     
-                    console.log(`✅ [${wsProject.name}] Найден родительский объект для задачи "${wsTask.name}": "${parentObject.object_name}"`);
+                    console.log(`✅ Найден родительский объект для задачи "${wsTask.name}": "${parentObject.object_name}"`);
                     
                     // Обрабатываем подзадачи (теперь они в поле child)
                     const subtasks = wsTask.child || [];
-                    console.log(`📑 [${wsProject.name}] Найдено подзадач в задаче "${wsTask.name}": ${subtasks.length}`);
+                    console.log(`📑 Найдено подзадач в задаче "${wsTask.name}": ${subtasks.length}`);
                     
-                    for (const subtask of subtasks) {
-                        subtaskCount++;
-                        
-                        try {
-                            const result = await processSingleSubtask(
-                                subtask, 
-                                parentObject, 
-                                wsProject, 
-                                existingSections
-                            );
+                    if (subtasks.length > 0) {
+                        for (const wsSubtask of subtasks) {
+                            subtaskCount++;
+                            globalAssignmentStats.total_sections++;
                             
-                            if (result.action === 'created') {
-                                results.created.push({
-                                    section: result.section,
-                                    project: wsProject,
-                                    subtask: subtask
-                                });
-                            } else if (result.action === 'updated') {
-                                results.updated.push({
-                                    section: result.section,
-                                    project: wsProject,
-                                    subtask: subtask
-                                });
-                            } else if (result.action === 'unchanged') {
-                                results.unchanged.push({
-                                    section: result.section,
-                                    project: wsProject,
-                                    subtask: subtask
+                            try {
+                                // Обрабатываем подзадачу с детальным логированием
+                                const result = await processSingleSubtask(wsSubtask, parentObject, wsProject, existingSections);
+                                
+                                // Собираем статистику назначений
+                                if (result.assignment_stats) {
+                                    const assignmentStats = result.assignment_stats.responsible_assignment;
+                                    
+                                    if (assignmentStats.attempted) {
+                                        globalAssignmentStats.responsible_assignments.attempted++;
+                                        
+                                        if (assignmentStats.success) {
+                                            globalAssignmentStats.responsible_assignments.successful++;
+                                        } else {
+                                            globalAssignmentStats.responsible_assignments.failed++;
+                                        }
+                                    } else {
+                                        globalAssignmentStats.responsible_assignments.skipped++;
+                                    }
+                                    
+                                    // Сохраняем детали для отчета
+                                    globalAssignmentStats.responsible_assignments.details.push(result.assignment_stats);
+                                }
+                                
+                                // Сохраняем результат по типу действия
+                                if (result.action === 'created') {
+                                    results.created.push(result);
+                                } else if (result.action === 'updated') {
+                                    results.updated.push(result);
+                                } else if (result.action === 'unchanged') {
+                                    results.unchanged.push(result);
+                                } else if (result.action === 'skipped') {
+                                    results.skipped.push(result);
+                                }
+                                
+                            } catch (error) {
+                                console.log(`❌ Ошибка обработки подзадачи "${wsSubtask.name}": ${error.message}`);
+                                results.errors.push({
+                                    project: wsProject.name,
+                                    task: wsTask.name,
+                                    subtask: wsSubtask.name,
+                                    error: error.message
                                 });
                             }
-                            
-                        } catch (subtaskError) {
-                            console.log(`❌ [${wsProject.name}] Ошибка обработки подзадачи "${subtask.name}": ${subtaskError.message}`);
-                            results.errors.push({
-                                project: wsProject.name,
-                                task: wsTask.name,
-                                subtask: subtask.name,
-                                error: subtaskError.message
-                            });
                         }
                     }
                 }
                 
-                console.log(`📊 [${wsProject.name}] Обработано задач: ${taskCount}, подзадач: ${subtaskCount}`);
+                console.log(`📊 Статистика по проекту "${wsProject.name}":`);
+                console.log(`   📋 Задач обработано: ${taskCount}`);
+                console.log(`   📑 Подзадач обработано: ${subtaskCount}`);
                 
-            } catch (projectError) {
-                console.log(`❌ [${wsProject.name}] Ошибка обработки проекта: ${projectError.message}`);
+            } catch (error) {
+                console.log(`❌ Ошибка обработки проекта "${wsProject.name}": ${error.message}`);
                 results.errors.push({
                     project: wsProject.name,
-                    error: projectError.message
+                    error: error.message
                 });
             }
         }
         
-        // 5. Выводим итоговую статистику
-        console.log(`\n🎉 Синхронизация разделов завершена!`);
-        console.log(`📊 Статистика синхронизации разделов:`);
-        console.log(`   🆕 Создано разделов: ${results.created.length}`);
-        console.log(`   🔄 Обновлено разделов: ${results.updated.length}`);
-        console.log(`   ✅ Разделов без изменений: ${results.unchanged.length}`);
-        console.log(`   🗑️ Удалено разделов: ${results.deleted.length}`);
-        console.log(`   ❌ Ошибок: ${results.errors.length}`);
+        // Итоговая статистика
+        console.log(`\n📊 === ИТОГОВАЯ СТАТИСТИКА СИНХРОНИЗАЦИИ РАЗДЕЛОВ ===`);
+        console.log(`📋 Всего разделов обработано: ${globalAssignmentStats.total_sections}`);
+        console.log(`🆕 Создано разделов: ${results.created.length}`);
+        console.log(`🔄 Обновлено разделов: ${results.updated.length}`);
+        console.log(`✅ Разделов без изменений: ${results.unchanged.length}`);
+        console.log(`⏭️ Пропущено разделов: ${results.skipped.length}`);
+        console.log(`❌ Ошибок: ${results.errors.length}`);
         
-        if (results.errors.length > 0) {
-            console.log(`\n❌ Детали ошибок:`);
-            results.errors.forEach((error, index) => {
-                console.log(`   ${index + 1}. ${error.project}: ${error.error}`);
-            });
+        console.log(`\n👤 === СТАТИСТИКА НАЗНАЧЕНИЙ ОТВЕТСТВЕННЫХ ===`);
+        console.log(`🎯 Попыток назначения: ${globalAssignmentStats.responsible_assignments.attempted}`);
+        console.log(`✅ Успешных назначений: ${globalAssignmentStats.responsible_assignments.successful}`);
+        console.log(`❌ Неудачных назначений: ${globalAssignmentStats.responsible_assignments.failed}`);
+        console.log(`⚠️ Пропущено (нет ответственного): ${globalAssignmentStats.responsible_assignments.skipped}`);
+        
+        if (globalAssignmentStats.responsible_assignments.attempted > 0) {
+            const successRate = (globalAssignmentStats.responsible_assignments.successful / globalAssignmentStats.responsible_assignments.attempted * 100).toFixed(1);
+            console.log(`📊 Процент успешных назначений: ${successRate}%`);
         }
+        
+        // Показываем детали неудачных назначений
+        const failedAssignments = globalAssignmentStats.responsible_assignments.details.filter(
+            detail => detail.responsible_assignment.attempted && !detail.responsible_assignment.success
+        );
+        
+        if (failedAssignments.length > 0) {
+            console.log(`\n⚠️ === ДЕТАЛИ НЕУДАЧНЫХ НАЗНАЧЕНИЙ ===`);
+            failedAssignments.slice(0, 10).forEach((detail, index) => {
+                console.log(`${index + 1}. 📋 Проект: "${detail.project_name}"`);
+                console.log(`   📑 Раздел: "${detail.subtask_name}"`);
+                console.log(`   👤 Искали: ${detail.responsible_assignment.responsible_data?.name || 'не указан'}`);
+                console.log(`   📧 Email: ${detail.responsible_assignment.responsible_data?.email || 'не указан'}`);
+                console.log(`   ❌ Причина: ${detail.responsible_assignment.error}`);
+            });
+            
+            if (failedAssignments.length > 10) {
+                console.log(`   ... и ещё ${failedAssignments.length - 10} неудачных назначений`);
+            }
+        }
+        
+        // Показываем примеры успешных назначений
+        const successfulAssignments = globalAssignmentStats.responsible_assignments.details.filter(
+            detail => detail.responsible_assignment.attempted && detail.responsible_assignment.success
+        );
+        
+        if (successfulAssignments.length > 0) {
+            console.log(`\n✅ === ПРИМЕРЫ УСПЕШНЫХ НАЗНАЧЕНИЙ ===`);
+            successfulAssignments.slice(0, 5).forEach((detail, index) => {
+                console.log(`${index + 1}. 📋 Проект: "${detail.project_name}"`);
+                console.log(`   📑 Раздел: "${detail.subtask_name}"`);
+                console.log(`   👤 Назначен: ${detail.responsible_assignment.found_user.first_name} ${detail.responsible_assignment.found_user.last_name}`);
+                console.log(`   📧 Email: ${detail.responsible_assignment.found_user.email}`);
+            });
+            
+            if (successfulAssignments.length > 5) {
+                console.log(`   ... и ещё ${successfulAssignments.length - 5} успешных назначений`);
+            }
+        }
+        
+        console.log(`=== КОНЕЦ СИНХРОНИЗАЦИИ РАЗДЕЛОВ ===\n`);
         
         return {
             success: true,
-            data: results,
             summary: {
                 created: results.created.length,
                 updated: results.updated.length,
                 unchanged: results.unchanged.length,
-                deleted: results.deleted.length,
-                errors: results.errors.length
-            }
+                skipped: results.skipped.length,
+                errors: results.errors.length,
+                total: globalAssignmentStats.total_sections
+            },
+            assignment_stats: globalAssignmentStats.responsible_assignments,
+            created: results.created,
+            updated: results.updated,
+            unchanged: results.unchanged,
+            skipped: results.skipped,
+            errors: results.errors
         };
         
     } catch (error) {
-        console.error('❌ Критическая ошибка синхронизации разделов:', error.message);
+        console.error('❌ Ошибка синхронизации разделов:', error.message);
         return {
             success: false,
-            error: error.message,
-            data: results
+            error: error.message
         };
     }
 }
 
 /**
  * Обрабатывает одну подзадачу для синхронизации
+ * С УЛУЧШЕННЫМ ЛОГИРОВАНИЕМ назначений ответственных
  */
 async function processSingleSubtask(wsSubtask, parentObject, wsProject, existingSections) {
-    console.log(`📑 [${wsProject.name}] Обработка подзадачи: "${wsSubtask.name}" (ID: ${wsSubtask.id})`);
+    console.log(`\n📑 === ОБРАБОТКА ПОДЗАДАЧИ ===`);
+    console.log(`📋 Проект: "${wsProject.name}"`);
+    console.log(`📑 Подзадача: "${wsSubtask.name}" (ID: ${wsSubtask.id})`);
+    
+    // Статистика назначений для этой подзадачи
+    const assignmentStats = {
+        project_name: wsProject.name,
+        subtask_name: wsSubtask.name,
+        subtask_id: wsSubtask.id,
+        responsible_assignment: {
+            attempted: false,
+            success: false,
+            responsible_data: null,
+            found_user: null,
+            error: null
+        }
+    };
     
     // 1. Фильтры подзадач
+    console.log(`\n🔍 Проверка фильтров подзадачи...`);
     if (wsSubtask.status !== 'active') {
-        console.log(`⏭️ [${wsProject.name}] Пропуск неактивной подзадачи: "${wsSubtask.name}"`);
+        console.log(`⏭️ ПРОПУСК: Подзадача неактивна (статус: ${wsSubtask.status})`);
+        console.log(`=== КОНЕЦ ОБРАБОТКИ ПОДЗАДАЧИ ===\n`);
         return { action: 'skipped', reason: 'inactive' };
     }
     
     if (wsSubtask.name.startsWith('!')) {
-        console.log(`⏭️ [${wsProject.name}] Пропуск служебной подзадачи: "${wsSubtask.name}"`);
+        console.log(`⏭️ ПРОПУСК: Служебная подзадача (начинается с "!")`);
+        console.log(`=== КОНЕЦ ОБРАБОТКИ ПОДЗАДАЧИ ===\n`);
         return { action: 'skipped', reason: 'service_task' };
     }
     
+    console.log(`✅ Подзадача прошла фильтры`);
+    
     // 2. Поиск ответственного пользователя
     let responsibleId = null;
+    
+    console.log(`\n👤 === НАЗНАЧЕНИЕ ОТВЕТСТВЕННОГО ЗА РАЗДЕЛ ===`);
+    console.log(`📋 Проект: "${wsProject.name}"`);
+    console.log(`📑 Раздел: "${wsSubtask.name}"`);
+    
     if (wsSubtask.user_to && wsSubtask.user_to.email) {
-        const responsible = await findUserByEmail(wsSubtask.user_to.email);
-        if (responsible) {
-            responsibleId = responsible.user_id;
-            console.log(`👤 [${wsProject.name}] Найден ответственный: ${responsible.first_name} ${responsible.last_name}`);
-        } else {
-            console.log(`⚠️ [${wsProject.name}] Ответственный не найден для email: ${wsSubtask.user_to.email}`);
+        assignmentStats.responsible_assignment.attempted = true;
+        assignmentStats.responsible_assignment.responsible_data = {
+            name: wsSubtask.user_to.name || wsSubtask.user_to.email,
+            email: wsSubtask.user_to.email,
+            id: wsSubtask.user_to.id
+        };
+        
+        console.log(`👤 Ищем ответственного:`);
+        console.log(`   📧 Email: ${wsSubtask.user_to.email}`);
+        console.log(`   👤 Имя: ${wsSubtask.user_to.name || 'не указано'}`);
+        console.log(`   🆔 ID в Worksection: ${wsSubtask.user_to.id || 'не указан'}`);
+        
+        try {
+            const responsible = await findUserByEmail(wsSubtask.user_to.email);
+            if (responsible) {
+                responsibleId = responsible.user_id;
+                assignmentStats.responsible_assignment.success = true;
+                assignmentStats.responsible_assignment.found_user = {
+                    user_id: responsible.user_id,
+                    first_name: responsible.first_name,
+                    last_name: responsible.last_name,
+                    email: responsible.email
+                };
+                
+                console.log(`✅ УСПЕХ: Найден ответственный за раздел`);
+                console.log(`   👤 Пользователь: ${responsible.first_name} ${responsible.last_name}`);
+                console.log(`   📧 Email: ${responsible.email}`);
+                console.log(`   🆔 ID: ${responsible.user_id}`);
+            } else {
+                assignmentStats.responsible_assignment.success = false;
+                assignmentStats.responsible_assignment.error = 'Пользователь не найден в базе';
+                
+                console.log(`❌ НЕУДАЧА: Ответственный не найден в базе`);
+                console.log(`   📧 Искали email: ${wsSubtask.user_to.email}`);
+                console.log(`   👤 Имя в WS: ${wsSubtask.user_to.name || 'не указано'}`);
+                console.log(`   ⚠️ Раздел будет создан без ответственного`);
+            }
+        } catch (error) {
+            assignmentStats.responsible_assignment.success = false;
+            assignmentStats.responsible_assignment.error = error.message;
+            
+            console.log(`❌ ОШИБКА: Ошибка при поиске ответственного`);
+            console.log(`   📧 Email: ${wsSubtask.user_to.email}`);
+            console.log(`   👤 Имя: ${wsSubtask.user_to.name || 'не указано'}`);
+            console.log(`   ❌ Ошибка: ${error.message}`);
         }
+    } else {
+        console.log(`⚠️ Ответственный не указан в подзадаче`);
+        console.log(`   📧 Email: ${wsSubtask.user_to?.email || 'не указан'}`);
+        console.log(`   👤 Имя: ${wsSubtask.user_to?.name || 'не указано'}`);
+        console.log(`   ⚠️ Раздел будет создан без ответственного`);
     }
     
+    console.log(`=== КОНЕЦ НАЗНАЧЕНИЯ ОТВЕТСТВЕННОГО ===\n`);
+    
     // 3. Подготовка данных раздела
+    console.log(`📝 Подготовка данных раздела...`);
     const sectionData = {
         section_name: wsSubtask.name.substring(0, 255), // Обрезаем до 255 символов
         section_description: wsSubtask.text || null,
@@ -1761,24 +2024,49 @@ async function processSingleSubtask(wsSubtask, parentObject, wsProject, existing
         external_updated_at: new Date().toISOString()
     };
     
+    console.log(`📋 Данные раздела подготовлены:`);
+    console.log(`   📑 Название: "${sectionData.section_name}"`);
+    console.log(`   👤 Ответственный: ${responsibleId ? `назначен (ID: ${responsibleId})` : 'не назначен'}`);
+    console.log(`   🔗 Объект: ${parentObject.object_name} (ID: ${parentObject.object_id})`);
+    console.log(`   📅 Даты: ${sectionData.section_start_date || 'не указана'} - ${sectionData.section_end_date || 'не указана'}`);
+    
     // 4. Проверка существующего раздела в рамках проекта
+    console.log(`\n🔍 Проверка существующего раздела...`);
     const existingSection = existingSections.find(
         s => s.external_id && 
              s.external_id.toString() === wsSubtask.id.toString() &&
              s.section_project_id === parentObject.object_project_id
     );
     
+    if (existingSection) {
+        console.log(`📋 Найден существующий раздел: "${existingSection.section_name}"`);
+        console.log(`   🆔 ID раздела: ${existingSection.section_id}`);
+        console.log(`   👤 Текущий ответственный: ${existingSection.section_responsible || 'не назначен'}`);
+    } else {
+        console.log(`📋 Раздел не найден, будет создан новый`);
+    }
+    
     // 5. Проверка согласованности связей (если раздел найден)
     if (existingSection) {
+        console.log(`\n🔍 Проверка согласованности связей...`);
+        
         // Проверяем согласованность project_id
         if (existingSection.section_project_id !== parentObject.object_project_id) {
-            console.log(`⚠️ [${wsProject.name}] Несогласованность project_id для раздела "${existingSection.section_name}": раздел=${existingSection.section_project_id}, объект=${parentObject.object_project_id}`);
+            console.log(`⚠️ ПРЕДУПРЕЖДЕНИЕ: Несогласованность project_id`);
+            console.log(`   📋 Раздел: "${existingSection.section_name}"`);
+            console.log(`   🔗 Раздел project_id: ${existingSection.section_project_id}`);
+            console.log(`   🔗 Объект project_id: ${parentObject.object_project_id}`);
+            
+            assignmentStats.responsible_assignment.error = 'Несогласованность project_id';
             throw new Error(`Несогласованность project_id для раздела "${existingSection.section_name}"`);
         }
         
         // Проверяем согласованность object_id  
         if (existingSection.section_object_id !== parentObject.object_id) {
-            console.log(`🔄 [${wsProject.name}] Изменение привязки раздела "${existingSection.section_name}" к новому объекту: ${existingSection.section_object_id} → ${parentObject.object_id}`);
+            console.log(`🔄 Изменение привязки раздела к новому объекту:`);
+            console.log(`   📋 Раздел: "${existingSection.section_name}"`);
+            console.log(`   🔗 Старый объект ID: ${existingSection.section_object_id}`);
+            console.log(`   🔗 Новый объект ID: ${parentObject.object_id}`);
             // Обновляем section_object_id в данных для обновления
             sectionData.section_object_id = parentObject.object_id;
         }
@@ -1790,31 +2078,127 @@ async function processSingleSubtask(wsSubtask, parentObject, wsProject, existing
         ]);
         
         if (needsUpdate) {
-            console.log(`🔄 [${wsProject.name}] Обновляем раздел: "${sectionData.section_name}"`);
+            console.log(`💾 Обновление существующего раздела...`);
+            
+            // Показываем изменения
+            const changes = [];
+            if (existingSection.section_name !== sectionData.section_name) {
+                changes.push(`название: "${existingSection.section_name}" → "${sectionData.section_name}"`);
+            }
+            if (existingSection.section_responsible !== sectionData.section_responsible) {
+                changes.push(`ответственный: ${existingSection.section_responsible || 'не назначен'} → ${sectionData.section_responsible || 'не назначен'}`);
+            }
+            if (existingSection.section_object_id !== sectionData.section_object_id) {
+                changes.push(`объект: ${existingSection.section_object_id} → ${sectionData.section_object_id}`);
+            }
+            
+            if (changes.length > 0) {
+                console.log(`🔄 Изменения:`);
+                changes.forEach(change => console.log(`   • ${change}`));
+            }
             
             const updatedSection = await updateSection(existingSection.section_id, sectionData);
             
             if (updatedSection) {
-                console.log(`✅ [${wsProject.name}] Раздел обновлен: "${sectionData.section_name}"`);
-                return { action: 'updated', section: updatedSection };
+                console.log(`✅ Раздел обновлен: "${wsSubtask.name}"`);
+                
+                // Итоговая статистика
+                console.log(`\n📊 === ИТОГОВАЯ СТАТИСТИКА ОБРАБОТКИ ПОДЗАДАЧИ ===`);
+                console.log(`📋 Проект: "${wsProject.name}"`);
+                console.log(`📑 Раздел: "${wsSubtask.name}" - ОБНОВЛЕН`);
+                console.log(`👤 Назначение ответственного:`);
+                if (assignmentStats.responsible_assignment.attempted) {
+                    if (assignmentStats.responsible_assignment.success) {
+                        console.log(`   ✅ УСПЕХ: ${assignmentStats.responsible_assignment.found_user.first_name} ${assignmentStats.responsible_assignment.found_user.last_name}`);
+                    } else {
+                        console.log(`   ❌ НЕУДАЧА: ${assignmentStats.responsible_assignment.error}`);
+                    }
+                } else {
+                    console.log(`   ⚠️ НЕ ВЫПОЛНЯЛОСЬ: Ответственный не указан в подзадаче`);
+                }
+                console.log(`🔄 Изменений: ${changes.length}`);
+                console.log(`=== КОНЕЦ ОБРАБОТКИ ПОДЗАДАЧИ ===\n`);
+                
+                return {
+                    action: 'updated',
+                    section: updatedSection,
+                    subtask: wsSubtask,
+                    assignment_stats: assignmentStats,
+                    changes: changes.length
+                };
             } else {
-                throw new Error(`Не удалось обновить раздел "${sectionData.section_name}"`);
+                throw new Error(`Не удалось обновить раздел "${wsSubtask.name}"`);
             }
         } else {
-            console.log(`✅ [${wsProject.name}] Раздел актуален: "${sectionData.section_name}"`);
-            return { action: 'unchanged', section: existingSection };
+            console.log(`✅ Раздел актуален, изменений не требуется`);
+            
+            // Итоговая статистика
+            console.log(`\n📊 === ИТОГОВАЯ СТАТИСТИКА ОБРАБОТКИ ПОДЗАДАЧИ ===`);
+            console.log(`📋 Проект: "${wsProject.name}"`);
+            console.log(`📑 Раздел: "${wsSubtask.name}" - БЕЗ ИЗМЕНЕНИЙ`);
+            console.log(`👤 Назначение ответственного:`);
+            if (assignmentStats.responsible_assignment.attempted) {
+                if (assignmentStats.responsible_assignment.success) {
+                    console.log(`   ✅ УСПЕХ: ${assignmentStats.responsible_assignment.found_user.first_name} ${assignmentStats.responsible_assignment.found_user.last_name}`);
+                } else {
+                    console.log(`   ❌ НЕУДАЧА: ${assignmentStats.responsible_assignment.error}`);
+                }
+            } else {
+                console.log(`   ⚠️ НЕ ВЫПОЛНЯЛОСЬ: Ответственный не указан в подзадаче`);
+            }
+            console.log(`=== КОНЕЦ ОБРАБОТКИ ПОДЗАДАЧИ ===\n`);
+            
+            return {
+                action: 'unchanged',
+                section: existingSection,
+                subtask: wsSubtask,
+                assignment_stats: assignmentStats,
+                changes: 0
+            };
         }
     } else {
         // Создаем новый раздел
-        console.log(`🆕 [${wsProject.name}] Создаем новый раздел: "${sectionData.section_name}"`);
+        console.log(`🆕 Создание нового раздела...`);
+        
+        // Проверяем согласованность project_id между стадией и объектом
+        if (parentObject.object_stage_id) {
+            console.log(`✅ Объект привязан к стадии ID: ${parentObject.object_stage_id}`);
+        } else {
+            console.log(`⚠️ ПРЕДУПРЕЖДЕНИЕ: Объект не привязан к стадии`);
+        }
         
         const newSection = await createSection(sectionData);
         
         if (newSection) {
-            console.log(`✅ [${wsProject.name}] Раздел создан: "${sectionData.section_name}" (ID: ${newSection.section_id})`);
-            return { action: 'created', section: newSection };
+            console.log(`✅ Новый раздел создан: "${wsSubtask.name}"`);
+            console.log(`   🆔 ID раздела: ${newSection.section_id}`);
+            console.log(`   👤 Ответственный: ${responsibleId ? 'назначен' : 'не назначен'}`);
+            
+            // Итоговая статистика
+            console.log(`\n📊 === ИТОГОВАЯ СТАТИСТИКА ОБРАБОТКИ ПОДЗАДАЧИ ===`);
+            console.log(`📋 Проект: "${wsProject.name}"`);
+            console.log(`📑 Раздел: "${wsSubtask.name}" - СОЗДАН`);
+            console.log(`👤 Назначение ответственного:`);
+            if (assignmentStats.responsible_assignment.attempted) {
+                if (assignmentStats.responsible_assignment.success) {
+                    console.log(`   ✅ УСПЕХ: ${assignmentStats.responsible_assignment.found_user.first_name} ${assignmentStats.responsible_assignment.found_user.last_name}`);
+                } else {
+                    console.log(`   ❌ НЕУДАЧА: ${assignmentStats.responsible_assignment.error}`);
+                }
+            } else {
+                console.log(`   ⚠️ НЕ ВЫПОЛНЯЛОСЬ: Ответственный не указан в подзадаче`);
+            }
+            console.log(`=== КОНЕЦ ОБРАБОТКИ ПОДЗАДАЧИ ===\n`);
+            
+            return {
+                action: 'created',
+                section: newSection,
+                subtask: wsSubtask,
+                assignment_stats: assignmentStats,
+                changes: 1
+            };
         } else {
-            throw new Error(`Не удалось создать раздел "${sectionData.section_name}"`);
+            throw new Error(`Не удалось создать раздел "${wsSubtask.name}"`);
         }
     }
 }

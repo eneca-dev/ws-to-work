@@ -134,31 +134,70 @@ async function getAllUsers() {
 
 /**
  * Ищет пользователя по имени или email (нечеткий поиск)
+ * С УЛУЧШЕННЫМ ЛОГИРОВАНИЕМ для диагностики назначений ответственных
  */
 async function findUserByName(userName, userEmail = null) {
+    const searchLog = {
+        searchName: userName,
+        searchEmail: userEmail,
+        strategies: [],
+        result: null,
+        timestamp: new Date().toISOString()
+    };
+
     try {
-        console.log(`🔍 Поиск пользователя по имени: "${userName}"${userEmail ? ` и email: "${userEmail}"` : ''}`);
+        console.log(`\n🔍 === ПОИСК ПОЛЬЗОВАТЕЛЯ ===`);
+        console.log(`👤 Поиск пользователя по имени: "${userName}"${userEmail ? ` и email: "${userEmail}"` : ''}`);
         
         const users = await getAllUsers();
         console.log(`👥 Всего пользователей в базе: ${users.length}`);
         
-        // НОВОЕ: Если передан email, сначала ищем по нему
-        if (userEmail) {
+        // Логируем все доступные пользователи для отладки
+        if (users.length > 0) {
+            console.log(`📋 Доступные пользователи в базе:`);
+            users.slice(0, 5).forEach((user, index) => {
+                console.log(`   ${index + 1}. ${user.first_name} ${user.last_name} (${user.email})`);
+            });
+            if (users.length > 5) {
+                console.log(`   ... и ещё ${users.length - 5} пользователей`);
+            }
+        }
+        
+        // СТРАТЕГИЯ 1: Если передан email, сначала ищем по нему
+        if (userEmail && userEmail.toLowerCase() !== 'noone' && userEmail !== '') {
+            console.log(`\n🎯 СТРАТЕГИЯ 1: Поиск по email "${userEmail}"`);
             const userByEmail = users.find(user => 
                 user.email && user.email.toLowerCase() === userEmail.toLowerCase()
             );
             
             if (userByEmail) {
                 const fullName = `${userByEmail.first_name} ${userByEmail.last_name}`.trim();
-                console.log(`✅ Найден пользователь по email: ${fullName} (${userByEmail.email})`);
+                console.log(`✅ УСПЕХ: Найден пользователь по email: ${fullName} (${userByEmail.email})`);
+                searchLog.strategies.push({
+                    strategy: 'email_exact',
+                    success: true,
+                    found_user: fullName
+                });
+                searchLog.result = { found: true, method: 'email_exact', user: fullName };
                 return {
                     ...userByEmail,
                     full_name: fullName
                 };
             } else {
-                console.log(`⚠️ Пользователь с email "${userEmail}" не найден, ищем по имени...`);
+                console.log(`❌ НЕУДАЧА: Пользователь с email "${userEmail}" не найден`);
+                searchLog.strategies.push({
+                    strategy: 'email_exact',
+                    success: false,
+                    reason: 'email_not_found'
+                });
+                console.log(`🔍 Переходим к поиску по имени...`);
             }
+        } else {
+            console.log(`⚠️ Email не предоставлен или некорректный: "${userEmail}"`);
         }
+        
+        // СТРАТЕГИЯ 2: Поиск по имени
+        console.log(`\n🎯 СТРАТЕГИЯ 2: Поиск по имени`);
         
         // Нормализуем имя для поиска - убираем спецсимволы и лишние пробелы
         const normalizedSearchName = userName
@@ -182,30 +221,58 @@ async function findUserByName(userName, userEmail = null) {
             };
         });
         
-        // 1. Ищем точное совпадение по полному имени (прямой порядок)
+        // СТРАТЕГИЯ 2.1: Ищем точное совпадение по полному имени (прямой порядок)
+        console.log(`\n🎯 СТРАТЕГИЯ 2.1: Точное совпадение (прямой порядок)`);
         let foundUser = usersWithFullName.find(user => 
             user.normalized_full === normalizedSearchName
         );
         
         if (foundUser) {
-            console.log(`✅ Найдено точное совпадение (прямой порядок): ${foundUser.full_name} (ID: ${foundUser.user_id})`);
+            console.log(`✅ УСПЕХ: Найдено точное совпадение (прямой порядок): ${foundUser.full_name} (ID: ${foundUser.user_id})`);
+            searchLog.strategies.push({
+                strategy: 'name_exact_direct',
+                success: true,
+                found_user: foundUser.full_name
+            });
+            searchLog.result = { found: true, method: 'name_exact_direct', user: foundUser.full_name };
             return foundUser;
+        } else {
+            console.log(`❌ НЕУДАЧА: Точное совпадение (прямой порядок) не найдено`);
+            searchLog.strategies.push({
+                strategy: 'name_exact_direct',
+                success: false
+            });
         }
         
-        // 2. Ищем точное совпадение по полному имени (обратный порядок)
+        // СТРАТЕГИЯ 2.2: Ищем точное совпадение по полному имени (обратный порядок)
+        console.log(`\n🎯 СТРАТЕГИЯ 2.2: Точное совпадение (обратный порядок)`);
         foundUser = usersWithFullName.find(user => 
             user.normalized_reversed === normalizedSearchName
         );
         
         if (foundUser) {
-            console.log(`✅ Найдено точное совпадение (обратный порядок): ${foundUser.full_name} (ID: ${foundUser.user_id})`);
+            console.log(`✅ УСПЕХ: Найдено точное совпадение (обратный порядок): ${foundUser.full_name} (ID: ${foundUser.user_id})`);
+            searchLog.strategies.push({
+                strategy: 'name_exact_reversed',
+                success: true,
+                found_user: foundUser.full_name
+            });
+            searchLog.result = { found: true, method: 'name_exact_reversed', user: foundUser.full_name };
             return foundUser;
+        } else {
+            console.log(`❌ НЕУДАЧА: Точное совпадение (обратный порядок) не найдено`);
+            searchLog.strategies.push({
+                strategy: 'name_exact_reversed',
+                success: false
+            });
         }
         
-        console.log(`🔍 Точного совпадения не найдено, ищем частичное...`);
+        console.log(`🔍 Точных совпадений не найдено, переходим к частичному поиску...`);
         
-        // 3. Разбиваем поисковое имя на части для более гибкого поиска
+        // СТРАТЕГИЯ 2.3: Разбиваем поисковое имя на части для более гибкого поиска
+        console.log(`\n🎯 СТРАТЕГИЯ 2.3: Поиск по частям имени`);
         const searchParts = normalizedSearchName.split(' ').filter(part => part.length > 0);
+        console.log(`📝 Части имени для поиска: [${searchParts.join(', ')}]`);
         
         if (searchParts.length >= 2) {
             // Ищем пользователя, у которого есть все части имени
@@ -219,12 +286,27 @@ async function findUserByName(userName, userEmail = null) {
             });
             
             if (foundUser) {
-                console.log(`✅ Найдено совпадение по частям имени: ${foundUser.full_name} (ID: ${foundUser.user_id})`);
+                console.log(`✅ УСПЕХ: Найдено совпадение по частям имени: ${foundUser.full_name} (ID: ${foundUser.user_id})`);
+                searchLog.strategies.push({
+                    strategy: 'name_parts_match',
+                    success: true,
+                    found_user: foundUser.full_name
+                });
+                searchLog.result = { found: true, method: 'name_parts_match', user: foundUser.full_name };
                 return foundUser;
+            } else {
+                console.log(`❌ НЕУДАЧА: Совпадение по частям имени не найдено`);
+                searchLog.strategies.push({
+                    strategy: 'name_parts_match',
+                    success: false
+                });
             }
+        } else {
+            console.log(`⚠️ Недостаточно частей имени для поиска (${searchParts.length})`);
         }
         
-        // 4. Ищем частичное совпадение (как было раньше)
+        // СТРАТЕГИЯ 2.4: Ищем частичное совпадение (как было раньше)
+        console.log(`\n🎯 СТРАТЕГИЯ 2.4: Частичное совпадение`);
         foundUser = usersWithFullName.find(user => 
             user.normalized_full.includes(normalizedSearchName) ||
             normalizedSearchName.includes(user.normalized_full) ||
@@ -233,34 +315,63 @@ async function findUserByName(userName, userEmail = null) {
         );
         
         if (foundUser) {
-            console.log(`✅ Найдено частичное совпадение: ${foundUser.full_name} (ID: ${foundUser.user_id})`);
+            console.log(`✅ УСПЕХ: Найдено частичное совпадение: ${foundUser.full_name} (ID: ${foundUser.user_id})`);
+            searchLog.strategies.push({
+                strategy: 'name_partial_match',
+                success: true,
+                found_user: foundUser.full_name
+            });
+            searchLog.result = { found: true, method: 'name_partial_match', user: foundUser.full_name };
+            return foundUser;
         } else {
-            console.log(`❌ Пользователь не найден: "${userName}"`);
-            console.log(`🔍 Поисковые части: [${searchParts.join(', ')}]`);
+            console.log(`❌ НЕУДАЧА: Частичное совпадение не найдено`);
+            searchLog.strategies.push({
+                strategy: 'name_partial_match',
+                success: false
+            });
+        }
+        
+        // ОКОНЧАТЕЛЬНЫЙ РЕЗУЛЬТАТ
+        console.log(`\n❌ ИТОГ: Пользователь не найден: "${userName}"`);
+        console.log(`🔍 Использованные стратегии: ${searchLog.strategies.length}`);
+        
+        // Показываем похожих пользователей для отладки
+        if (searchParts.length > 0) {
+            console.log(`\n🔍 ПОХОЖИЕ ПОЛЬЗОВАТЕЛИ (для отладки):`);
+            const similarUsers = usersWithFullName.filter(user => 
+                searchParts.some(part => 
+                    user.first_name.toLowerCase().includes(part) || 
+                    user.last_name.toLowerCase().includes(part)
+                )
+            ).slice(0, 5);
             
-            // Показываем похожих пользователей для отладки
-            if (searchParts.length > 0) {
-                const similarUsers = usersWithFullName.filter(user => 
-                    searchParts.some(part => 
-                        user.first_name.toLowerCase().includes(part) || 
-                        user.last_name.toLowerCase().includes(part)
-                    )
-                ).slice(0, 5);
-                
-                if (similarUsers.length > 0) {
-                    console.log(`🔍 Похожие пользователи:`);
-                    similarUsers.forEach(user => {
-                        console.log(`   - ${user.full_name} (${user.email})`);
-                    });
-                }
+            if (similarUsers.length > 0) {
+                similarUsers.forEach((user, index) => {
+                    console.log(`   ${index + 1}. ${user.full_name} (${user.email})`);
+                });
+            } else {
+                console.log(`   Похожих пользователей не найдено`);
             }
         }
         
-        return foundUser;
+        searchLog.result = { found: false, method: null, user: null };
+        return null;
         
     } catch (error) {
         console.error('❌ Ошибка поиска пользователя:', error.message);
+        searchLog.result = { found: false, method: null, user: null, error: error.message };
         throw error;
+    } finally {
+        // Логируем итоговую статистику поиска
+        console.log(`\n📊 СТАТИСТИКА ПОИСКА:`);
+        console.log(`   Искали: "${searchLog.searchName}" (${searchLog.searchEmail || 'без email'})`);
+        console.log(`   Стратегий использовано: ${searchLog.strategies.length}`);
+        console.log(`   Результат: ${searchLog.result?.found ? '✅ НАЙДЕН' : '❌ НЕ НАЙДЕН'}`);
+        if (searchLog.result?.found) {
+            console.log(`   Метод: ${searchLog.result.method}`);
+            console.log(`   Пользователь: ${searchLog.result.user}`);
+        }
+        console.log(`=== КОНЕЦ ПОИСКА ПОЛЬЗОВАТЕЛЯ ===\n`);
     }
 }
 
@@ -547,17 +658,50 @@ async function deleteSection(sectionId) {
 
 /**
  * Находит пользователя по email
+ * С УЛУЧШЕННЫМ ЛОГИРОВАНИЕМ
  */
 async function findUserByEmail(email) {
     try {
+        console.log(`\n🔍 === ПОИСК ПОЛЬЗОВАТЕЛЯ ПО EMAIL ===`);
+        console.log(`📧 Поиск пользователя по email: "${email}"`);
+        
+        if (!email || email.toLowerCase() === 'noone' || email.trim() === '') {
+            console.log(`⚠️ Email некорректный или не предоставлен: "${email}"`);
+            console.log(`=== КОНЕЦ ПОИСКА ПО EMAIL ===\n`);
+            return null;
+        }
+        
         const users = await makeSupabaseRequest(`profiles?email=eq.${email}&select=*`);
+        console.log(`👥 Найдено пользователей с email "${email}": ${users.length}`);
         
         if (users.length > 0) {
-            return users[0];
+            const user = users[0];
+            const fullName = `${user.first_name} ${user.last_name}`.trim();
+            console.log(`✅ УСПЕХ: Найден пользователь по email: ${fullName} (ID: ${user.user_id})`);
+            console.log(`=== КОНЕЦ ПОИСКА ПО EMAIL ===\n`);
+            return user;
+        } else {
+            console.log(`❌ НЕУДАЧА: Пользователь с email "${email}" не найден в базе`);
+            
+            // Показываем похожие email для отладки
+            const allUsers = await getAllUsers();
+            const similarEmails = allUsers
+                .filter(user => user.email && user.email.toLowerCase().includes(email.toLowerCase().split('@')[0]))
+                .slice(0, 3);
+            
+            if (similarEmails.length > 0) {
+                console.log(`🔍 Похожие email в базе:`);
+                similarEmails.forEach((user, index) => {
+                    console.log(`   ${index + 1}. ${user.first_name} ${user.last_name} (${user.email})`);
+                });
+            }
+            
+            console.log(`=== КОНЕЦ ПОИСКА ПО EMAIL ===\n`);
+            return null;
         }
-        return null;
     } catch (error) {
         console.error(`❌ Ошибка при поиске пользователя по email ${email}:`, error.message);
+        console.log(`=== КОНЕЦ ПОИСКА ПО EMAIL ===\n`);
         return null;
     }
 }
