@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const cors = require('cors');
 require('dotenv').config({ path: path.join(__dirname, '../ws.env') });
+const fs = require('fs');
 
 // Импорт модулей синхронизации
 const { 
@@ -20,6 +21,80 @@ const {
     checkSyncHealth
 } = require('../functions/projects');
 
+// Создаём папку для логов если не существует
+const logsDir = path.join(__dirname, '..', 'logs');
+const reportsDir = path.join(__dirname, '..', 'reports');
+if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+}
+if (!fs.existsSync(reportsDir)) {
+    fs.mkdirSync(reportsDir, { recursive: true });
+}
+
+// Функция для записи логов в файл
+const writeLogToFile = (logEntry, logType = 'sync') => {
+    const date = new Date().toISOString().slice(0, 10);
+    const logFileName = `${logType}_${date}.log`;
+    const logPath = path.join(logsDir, logFileName);
+    
+    const timestamp = new Date().toISOString();
+    const formattedEntry = `[${timestamp}] ${logEntry}\n`;
+    
+    try {
+        fs.appendFileSync(logPath, formattedEntry);
+    } catch (error) {
+        console.error('Ошибка записи в лог файл:', error);
+    }
+};
+
+// Функция для создания отчёта о синхронизации
+const createSyncReport = (syncResult) => {
+    const timestamp = new Date().toISOString();
+    const date = timestamp.slice(0, 10);
+    const reportFileName = `sync_report_${timestamp.replace(/[:.]/g, '-')}.json`;
+    const reportPath = path.join(reportsDir, reportFileName);
+    
+    const report = {
+        ...syncResult,
+        report_metadata: {
+            generated_at: timestamp,
+            report_type: 'sync_report',
+            version: '1.0.0'
+        }
+    };
+    
+    try {
+        fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
+        console.log(`📄 Отчёт создан: ${reportFileName}`);
+        return reportFileName;
+    } catch (error) {
+        console.error('Ошибка создания отчёта:', error);
+        return null;
+    }
+};
+
+// Функция для получения списка отчётов
+const getReportsList = () => {
+    try {
+        const files = fs.readdirSync(reportsDir);
+        return files
+            .filter(file => file.startsWith('sync_report_') && file.endsWith('.json'))
+            .map(file => {
+                const stat = fs.statSync(path.join(reportsDir, file));
+                return {
+                    filename: file,
+                    created_at: stat.birthtime,
+                    size: stat.size,
+                    path: `/api/reports/download/${file}`
+                };
+            })
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    } catch (error) {
+        console.error('Ошибка получения списка отчётов:', error);
+        return [];
+    }
+};
+
 class WSToWorkApp {
     constructor() {
         this.app = express();
@@ -29,6 +104,7 @@ class WSToWorkApp {
             successRequests: 0,
             errorRequests: 0,
             avgResponseTime: 0,
+            lastSyncDate: null,
             projectsCount: 0,
             tasksCount: 0,
             startTime: Date.now()
@@ -44,20 +120,26 @@ class WSToWorkApp {
         this.app.use(cors());
         
         // JSON парсинг
-        this.app.use(express.json());
-        this.app.use(express.urlencoded({ extended: true }));
+        this.app.use(express.json({ limit: '10mb' }));
+        this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
         
         // Статические файлы
         this.app.use(express.static(path.join(__dirname, '../public')));
         
-        // Логирование запросов
+        // Middleware для логирования запросов
         this.app.use((req, res, next) => {
-            const start = Date.now();
+            const startTime = Date.now();
+            const logEntry = `${req.method} ${req.url} - ${req.ip}`;
+            
+            writeLogToFile(logEntry, 'access');
+            console.log(`📝 ${logEntry}`);
             
             res.on('finish', () => {
-                const duration = Date.now() - start;
+                const duration = Date.now() - startTime;
+                const statusLogEntry = `${req.method} ${req.url} - ${res.statusCode} (${duration}ms)`;
+                writeLogToFile(statusLogEntry, 'access');
+                
                 this.updateStats('request', duration, res.statusCode < 400);
-                console.log(`${req.method} ${req.path} - ${res.statusCode} (${duration}ms)`);
             });
             
             next();
@@ -80,22 +162,122 @@ class WSToWorkApp {
             });
         });
 
-        // API для синхронизации проектов
-        this.app.post('/api/sync/projects', async (req, res) => {
-            try {
-                console.log('🚀 Запуск синхронизации проектов...');
-                const result = await this.syncProjects(req.body);
-                
-                console.log(`✅ Синхронизация завершена: ${result.projectsCount} проектов, ${result.tasksCount} задач`);
+        // API для получения статуса сервера
+        this.app.get('/api/status', (req, res) => {
+            const uptime = Date.now() - this.stats.uptime;
+            
+            res.json({
+                success: true,
+                status: 'running',
+                uptime: Math.floor(uptime / 1000),
+                stats: this.stats,
+                environment: {
+                    platform: process.platform,
+                    node_version: process.version,
+                    working_directory: process.cwd(),
+                    memory_usage: process.memoryUsage(),
+                    cpu_usage: process.cpuUsage()
+                },
+                configuration: {
+                    supabase_configured: !!process.env.SUPABASE_URL,
+                    worksection_configured: !!process.env.WORKSECTION_HASH,
+                    logs_enabled: true,
+                    reports_enabled: true
+                }
+            });
+        });
 
+        // API для получения логов
+        this.app.get('/api/logs/:type?', (req, res) => {
+            const logType = req.params.type || 'sync';
+            const date = req.query.date || new Date().toISOString().slice(0, 10);
+            const logFileName = `${logType}_${date}.log`;
+            const logPath = path.join(logsDir, logFileName);
+            
+            try {
+                if (fs.existsSync(logPath)) {
+                    const logContent = fs.readFileSync(logPath, 'utf8');
+                    const lines = logContent.split('\n').filter(line => line.trim());
+                    
+                    res.json({
+                        success: true,
+                        date,
+                        type: logType,
+                        total_lines: lines.length,
+                        logs: lines
+                    });
+                } else {
+                    res.json({
+                        success: true,
+                        date,
+                        type: logType,
+                        total_lines: 0,
+                        logs: []
+                    });
+                }
+            } catch (error) {
+                res.status(500).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // API для получения списка отчётов
+        this.app.get('/api/reports/list', (req, res) => {
+            try {
+                const reports = getReportsList();
                 res.json({
                     success: true,
-                    ...result
+                    total: reports.length,
+                    reports
                 });
+            } catch (error) {
+                res.status(500).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // API для скачивания отчёта
+        this.app.get('/api/reports/download/:filename', (req, res) => {
+            const filename = req.params.filename;
+            const reportPath = path.join(reportsDir, filename);
+            
+            try {
+                if (fs.existsSync(reportPath)) {
+                    res.setHeader('Content-Type', 'application/json');
+                    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+                    res.sendFile(reportPath);
+                } else {
+                    res.status(404).json({
+                        success: false,
+                        error: 'Отчёт не найден'
+                    });
+                }
+            } catch (error) {
+                res.status(500).json({
+                    success: false,
+                    error: error.message
+                });
+            }
+        });
+
+        // API для синхронизации проектов
+        this.app.post('/api/projects/sync', async (req, res) => {
+            try {
+                writeLogToFile('🏢 Запуск синхронизации проектов...', 'sync');
+                console.log('🏢 Запуск синхронизации проектов...');
+                
+                const result = await syncProjectsToSupabase();
+                
+                writeLogToFile(`✅ Синхронизация проектов завершена: ${JSON.stringify(result.summary || result)}`, 'sync');
+                res.json(result);
 
             } catch (error) {
-                console.error('❌ Ошибка синхронизации:', error.message);
-
+                writeLogToFile(`❌ Ошибка синхронизации проектов: ${error.message}`, 'sync');
+                console.error('❌ Ошибка синхронизации проектов:', error.message);
                 res.status(500).json({
                     success: false,
                     error: error.message
@@ -151,7 +333,7 @@ class WSToWorkApp {
         // ======= НОВЫЕ API ДЛЯ РАБОТЫ С ПРОЕКТАМИ =======
 
         // API для получения проектов с меткой "eneca.work sync"
-        this.app.get('/api/projects/sync', async (req, res) => {
+        this.app.get('/api/projects/with-sync-tag', async (req, res) => {
             try {
                 console.log('🔍 Получение проектов с меткой sync...');
                 
@@ -257,13 +439,16 @@ class WSToWorkApp {
         // API для синхронизации стадий из меток Worksection
         this.app.post('/api/stages/sync', async (req, res) => {
             try {
-                console.log('🏷️ Запуск синхронизации стадий...');
+                writeLogToFile('🎯 Запуск синхронизации стадий...', 'sync');
+                console.log('🎯 Запуск синхронизации стадий...');
                 
                 const result = await syncStagesFromWorksection();
                 
+                writeLogToFile(`✅ Синхронизация стадий завершена: ${JSON.stringify(result.summary || result)}`, 'sync');
                 res.json(result);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка синхронизации стадий: ${error.message}`, 'sync');
                 console.error('❌ Ошибка синхронизации стадий:', error.message);
                 res.status(500).json({
                     success: false,
@@ -275,13 +460,16 @@ class WSToWorkApp {
         // API для синхронизации объектов из задач Worksection
         this.app.post('/api/objects/sync', async (req, res) => {
             try {
+                writeLogToFile('📦 Запуск синхронизации объектов...', 'sync');
                 console.log('📦 Запуск синхронизации объектов...');
                 
                 const result = await syncObjectsFromWorksection();
                 
+                writeLogToFile(`✅ Синхронизация объектов завершена: ${JSON.stringify(result.summary || result)}`, 'sync');
                 res.json(result);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка синхронизации объектов: ${error.message}`, 'sync');
                 console.error('❌ Ошибка синхронизации объектов:', error.message);
                 res.status(500).json({
                     success: false,
@@ -293,13 +481,16 @@ class WSToWorkApp {
         // API для синхронизации разделов из подзадач Worksection
         this.app.post('/api/sections/sync', async (req, res) => {
             try {
+                writeLogToFile('📑 Запуск синхронизации разделов...', 'sync');
                 console.log('📑 Запуск синхронизации разделов...');
                 
                 const result = await syncSectionsFromWorksection();
                 
+                writeLogToFile(`✅ Синхронизация разделов завершена: ${JSON.stringify(result.summary || result)}`, 'sync');
                 res.json(result);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка синхронизации разделов: ${error.message}`, 'sync');
                 console.error('❌ Ошибка синхронизации разделов:', error.message);
                 res.status(500).json({
                     success: false,
@@ -311,13 +502,24 @@ class WSToWorkApp {
         // API для полной синхронизации всех данных
         this.app.post('/api/sync/full', async (req, res) => {
             try {
+                writeLogToFile('🚀 Запуск ПОЛНОЙ синхронизации всех данных...', 'sync');
                 console.log('🚀 Запуск ПОЛНОЙ синхронизации всех данных...');
                 
                 const result = await this.runFullSync();
                 
+                // Создаём отчёт о синхронизации
+                const reportFileName = createSyncReport(result);
+                if (reportFileName) {
+                    result.report_filename = reportFileName;
+                }
+                
+                writeLogToFile(`✅ Полная синхронизация завершена: ${JSON.stringify(result.summary)}`, 'sync');
+                this.stats.lastSyncDate = new Date().toISOString();
+                
                 res.json(result);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка полной синхронизации: ${error.message}`, 'sync');
                 console.error('❌ Ошибка полной синхронизации:', error.message);
                 res.status(500).json({
                     success: false,
@@ -330,13 +532,16 @@ class WSToWorkApp {
         // API для проверки целостности данных
         this.app.get('/api/validate/hierarchy', async (req, res) => {
             try {
+                writeLogToFile('🔍 Запуск проверки целостности иерархии...', 'validation');
                 console.log('🔍 Запуск проверки целостности иерархии...');
                 
                 const result = await validateHierarchyConsistency();
                 
+                writeLogToFile(`✅ Проверка целостности завершена: ${JSON.stringify(result.summary || result)}`, 'validation');
                 res.json(result);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка проверки целостности: ${error.message}`, 'validation');
                 console.error('❌ Ошибка проверки целостности:', error.message);
                 res.status(500).json({
                     success: false,
@@ -348,13 +553,16 @@ class WSToWorkApp {
         // API для получения детального отчёта о состоянии системы
         this.app.get('/api/report/system-status', async (req, res) => {
             try {
+                writeLogToFile('📊 Генерация отчёта о состоянии системы...', 'report');
                 console.log('📊 Генерация отчёта о состоянии системы...');
                 
                 const result = await generateSystemStatusReport();
                 
+                writeLogToFile(`✅ Отчёт о состоянии системы создан`, 'report');
                 res.json(result);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка генерации отчёта: ${error.message}`, 'report');
                 console.error('❌ Ошибка генерации отчёта:', error.message);
                 res.status(500).json({
                     success: false,
@@ -366,13 +574,16 @@ class WSToWorkApp {
         // API для очистки orphaned записей
         this.app.post('/api/maintenance/cleanup-orphaned', async (req, res) => {
             try {
+                writeLogToFile('🧹 Запуск очистки orphaned записей...', 'maintenance');
                 console.log('🧹 Запуск очистки orphaned записей...');
                 
                 const result = await cleanupOrphanedRecords(req.body);
                 
+                writeLogToFile(`✅ Очистка orphaned записей завершена: ${JSON.stringify(result.summary || result)}`, 'maintenance');
                 res.json(result);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка очистки orphaned записей: ${error.message}`, 'maintenance');
                 console.error('❌ Ошибка очистки orphaned записей:', error.message);
                 res.status(500).json({
                     success: false,
@@ -384,13 +595,16 @@ class WSToWorkApp {
         // API для проверки здоровья синхронизации
         this.app.get('/api/health/sync-status', async (req, res) => {
             try {
+                writeLogToFile('🏥 Проверка здоровья системы синхронизации...', 'health');
                 console.log('🏥 Проверка здоровья системы синхронизации...');
                 
                 const result = await checkSyncHealth();
                 
+                writeLogToFile(`✅ Проверка здоровья завершена: ${JSON.stringify(result.summary || result)}`, 'health');
                 res.json(result);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка проверки здоровья синхронизации: ${error.message}`, 'health');
                 console.error('❌ Ошибка проверки здоровья синхронизации:', error.message);
                 res.status(500).json({
                     success: false,
