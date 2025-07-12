@@ -1,1092 +1,233 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WS-to-Work Integration</title>
+    <title>Worksection Sync</title>
     <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
             padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #333;
-            min-height: 100vh;
         }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
+        .container { max-width: 800px; margin: 0 auto; }
+        .header { 
             background: white;
-            border-radius: 12px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            padding: 30px;
-        }
-        h1 {
-            color: #4c63d2;
-            text-align: center;
-            margin-bottom: 30px;
-            font-size: 2.2em;
-        }
-        .status {
-            background: #f8f9fa;
-            border-radius: 8px;
             padding: 20px;
-            margin-bottom: 30px;
-            border-left: 4px solid #28a745;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
         }
-        .buttons {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 15px;
-            margin: 30px 0;
-        }
-        button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        .sync-button {
+            background: #007bff;
             color: white;
             border: none;
-            padding: 15px 25px;
-            border-radius: 8px;
+            padding: 12px 24px;
+            border-radius: 6px;
             cursor: pointer;
             font-size: 16px;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+            margin-bottom: 20px;
         }
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        .sync-button:hover { background: #0056b3; }
+        .sync-button:disabled { background: #ccc; cursor: not-allowed; }
+        .status { 
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            font-weight: bold;
         }
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-        .logs {
-            background: #1e1e1e;
-            color: #f0f0f0;
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .status.info { background: #d1ecf1; color: #0c5460; }
+        .logs { 
+            background: white;
             padding: 20px;
             border-radius: 8px;
-            height: 300px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            height: 400px;
             overflow-y: auto;
-            font-family: 'Courier New', monospace;
+            font-family: monospace;
             font-size: 14px;
-            line-height: 1.4;
-            margin-top: 20px;
         }
-        .log-entry {
+        .log-entry { 
             margin-bottom: 5px;
             padding: 2px 0;
         }
-        .log-success { color: #4ade80; }
-        .log-error { color: #f87171; }
-        .log-info { color: #60a5fa; }
-        .log-warning { color: #fbbf24; }
-        
-        .debug-section {
-            background: #f8f9fa;
-            border-radius: 8px;
-            padding: 20px;
-            margin: 30px 0;
-            border-left: 4px solid #6c757d;
+        .log-entry.success { color: #28a745; }
+        .log-entry.error { color: #dc3545; }
+        .log-entry.warning { color: #ffc107; }
+        .log-entry.info { color: #17a2b8; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
         }
-        .debug-section h3 {
-            margin-top: 0;
-            color: #6c757d;
-        }
-        .debug-info {
-            background: #ffffff;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
+        .stat-card {
+            background: white;
             padding: 15px;
-            margin-top: 15px;
-            max-height: 400px;
-            overflow-y: auto;
-            font-family: 'Courier New', monospace;
-            font-size: 12px;
-            line-height: 1.4;
-        }
-        .project-card {
-            background: #e3f2fd;
-            border: 1px solid #2196f3;
             border-radius: 6px;
-            padding: 10px;
-            margin: 10px 0;
-        }
-        .project-name {
-            font-weight: bold;
-            color: #1976d2;
-            margin-bottom: 5px;
-        }
-        .project-details {
-            font-size: 11px;
-            color: #666;
-        }
-        .tag-list {
-            background: #fff3cd;
-            border: 1px solid #ffeaa7;
-            border-radius: 4px;
-            padding: 5px;
-            margin: 5px 0;
-        }
-        .tag-item {
-            background: #007bff;
-            color: white;
-            padding: 2px 6px;
-            border-radius: 3px;
-            margin: 2px;
-            display: inline-block;
-            font-size: 10px;
-        }
-        .no-data {
-            color: #dc3545;
-            font-style: italic;
             text-align: center;
-            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
+        .stat-number { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
+        .stat-label { font-size: 12px; color: #666; }
+        .created { color: #28a745; }
+        .updated { color: #007bff; }
+        .unchanged { color: #6c757d; }
+        .errors { color: #dc3545; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🔄 WS-to-Work Integration</h1>
-        
-        <div class="status">
-            <h3>🟢 Статус сервера</h3>
-            <p id="serverStatus">Проверяется...</p>
+        <div class="header">
+            <h1>🔄 Worksection to eneca.work Sync</h1>
+            <p>Simplified synchronization tool</p>
         </div>
         
-        <div class="buttons">
-            <button onclick="checkStatus()">📊 Проверить статус</button>
-            <button onclick="syncProjects()">🏢 Синхронизировать проекты</button>
-            <button onclick="syncStages()">🎯 Синхронизировать стадии</button>
-            <button onclick="syncObjects()">📦 Синхронизировать объекты</button>
-            <button onclick="syncSections()">📑 Синхронизировать разделы</button>
-            <button onclick="runFullSync()">🚀 Полная синхронизация</button>
-        </div>
+        <button class="sync-button" onclick="startSync()">Start Full Sync</button>
         
-        <div class="debug-section">
-            <h3>🏥 Диагностика и обслуживание</h3>
-            <div class="buttons">
-                <button onclick="checkSyncHealth()">🩺 Проверить здоровье системы</button>
-                <button onclick="validateHierarchy()">🔍 Проверить целостность данных</button>
-                <button onclick="getSystemReport()">📈 Отчёт о состоянии системы</button>
-                <button onclick="cleanupOrphaned()">🧹 Очистить orphaned записи</button>
+        <div id="status"></div>
+        
+        <div class="stats" id="stats" style="display: none;">
+            <div class="stat-card">
+                <div class="stat-number created" id="created">0</div>
+                <div class="stat-label">Created</div>
             </div>
-            <div class="debug-info" id="diagnosticInfo"></div>
-        </div>
-        
-        <div class="debug-section">
-            <h3>🔍 Отладочная информация</h3>
-            <div class="buttons">
-                <button onclick="checkSyncProjects()">📋 Получить проекты с sync тегом</button>
-                <button onclick="checkAllProjectTags()">🏷️ Показать все теги проектов</button>
-                <button onclick="checkSupabaseProjects()">🗄️ Проекты в Supabase</button>
-                <button onclick="testWorksectionConnection()">🔗 Тест подключения к Worksection</button>
-                <button onclick="fullDiagnostic()">🔬 Полная диагностика проблемы</button>
+            <div class="stat-card">
+                <div class="stat-number updated" id="updated">0</div>
+                <div class="stat-label">Updated</div>
             </div>
-            <div class="debug-info" id="debugInfo"></div>
+            <div class="stat-card">
+                <div class="stat-number unchanged" id="unchanged">0</div>
+                <div class="stat-label">Unchanged</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number errors" id="errors">0</div>
+                <div class="stat-label">Errors</div>
+            </div>
         </div>
         
         <div class="logs" id="logs">
-            <div class="log-entry log-info">Система готова к работе...</div>
+            <div class="log-entry info">Ready to sync...</div>
         </div>
     </div>
-
+    
     <script>
-        let isLoading = false;
-
-        function log(message, type = 'info') {
+        let isRunning = false;
+        
+        function addLog(message, level = 'info') {
             const logs = document.getElementById('logs');
-            const timestamp = new Date().toLocaleTimeString('ru-RU');
             const entry = document.createElement('div');
-            entry.className = `log-entry log-${type}`;
-            entry.textContent = `[${timestamp}] ${message}`;
+            entry.className = `log-entry ${level}`;
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
             logs.appendChild(entry);
             logs.scrollTop = logs.scrollHeight;
         }
-
-        function setLoading(loading) {
-            isLoading = loading;
-            const buttons = document.querySelectorAll('button');
-            buttons.forEach(btn => btn.disabled = loading);
-        }
-
-        async function checkStatus() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🔍 Проверка статуса сервера...', 'info');
-            
-            try {
-                const response = await fetch('/api/health');
-                const data = await response.json();
-                
-                if (data.status === 'ok') {
-                    const uptime = Math.floor(data.uptime / 1000);
-                    log(`✅ Сервер работает! Uptime: ${uptime}s`, 'success');
-                    document.getElementById('serverStatus').textContent = 
-                        `Сервер работает. Uptime: ${uptime} секунд`;
-                } else {
-                    log('❌ Ошибка состояния сервера', 'error');
-                }
-            } catch (error) {
-                log(`❌ Ошибка подключения: ${error.message}`, 'error');
-            }
-            
-            setLoading(false);
-        }
-
-        async function syncProjects() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🏢 Запуск синхронизации проектов...', 'info');
-            
-            try {
-                const response = await fetch('/api/projects/sync-auto', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.success) {
-                    const summary = data.summary || {};
-                    log(`✅ Проекты синхронизированы: найдено ${summary.found || 0}, создано ${summary.created || 0}, ошибок ${summary.errors || 0}`, 'success');
-                } else {
-                    log(`❌ Ошибка синхронизации проектов: ${data.error}`, 'error');
-                }
-            } catch (error) {
-                log(`❌ Ошибка запроса: ${error.message}`, 'error');
-            }
-            
-            setLoading(false);
-        }
-
-        async function syncStages() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🎯 Запуск синхронизации стадий...', 'info');
-            
-            try {
-                const response = await fetch('/api/stages/sync', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.success) {
-                    log(`✅ Стадии синхронизированы: ${data.created || 0} создано, ${data.updated || 0} обновлено`, 'success');
-                } else {
-                    log(`❌ Ошибка синхронизации стадий: ${data.error}`, 'error');
-                }
-            } catch (error) {
-                log(`❌ Ошибка запроса: ${error.message}`, 'error');
-            }
-            
-            setLoading(false);
-        }
-
-        async function syncObjects() {
-            if (isLoading) return;
-            setLoading(true);
-            log('📦 Запуск синхронизации объектов...', 'info');
-            
-            try {
-                const response = await fetch('/api/objects/sync', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.success) {
-                    log(`✅ Объекты синхронизированы: ${data.created || 0} создано, ${data.updated || 0} обновлено`, 'success');
-                } else {
-                    log(`❌ Ошибка синхронизации объектов: ${data.error}`, 'error');
-                }
-            } catch (error) {
-                log(`❌ Ошибка запроса: ${error.message}`, 'error');
-            }
-            
-            setLoading(false);
-        }
-
-        async function syncSections() {
-            if (isLoading) return;
-            setLoading(true);
-            log('📑 Запуск синхронизации разделов...', 'info');
-            
-            try {
-                const response = await fetch('/api/sections/sync', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.success) {
-                    log(`✅ Разделы синхронизированы: ${data.created || 0} создано, ${data.updated || 0} обновлено`, 'success');
-                } else {
-                    log(`❌ Ошибка синхронизации разделов: ${data.error}`, 'error');
-                }
-            } catch (error) {
-                log(`❌ Ошибка запроса: ${error.message}`, 'error');
-            }
-            
-            setLoading(false);
-        }
-
-        async function runFullSync() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🚀 Запуск полной синхронизации...', 'info');
-            
-            try {
-                const response = await fetch('/api/sync/full', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.success) {
-                    log(`✅ Полная синхронизация завершена за ${data.duration}`, 'success');
-                    log(`📊 Всего: создано ${data.totalCreated}, обновлено ${data.totalUpdated}, ошибок ${data.totalErrors}`, 'info');
-                } else {
-                    log(`❌ Ошибка полной синхронизации: ${data.error}`, 'error');
-                }
-            } catch (error) {
-                log(`❌ Ошибка запроса: ${error.message}`, 'error');
-            }
-            
-            setLoading(false);
-        }
-
-        // === ОТЛАДОЧНЫЕ ФУНКЦИИ ===
         
-        async function checkSyncProjects() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🔍 Получение проектов с sync тегом...', 'info');
+        function updateStatus(message, type = 'info') {
+            const status = document.getElementById('status');
+            status.className = `status ${type}`;
+            status.textContent = message;
+        }
+        
+        function updateStats(stats) {
+            if (!stats) return;
+            
+            const statsDiv = document.getElementById('stats');
+            statsDiv.style.display = 'grid';
+            
+            const total = stats.total || {};
+            document.getElementById('created').textContent = total.created || 0;
+            document.getElementById('updated').textContent = total.updated || 0;
+            document.getElementById('unchanged').textContent = total.unchanged || 0;
+            document.getElementById('errors').textContent = total.errors || 0;
+        }
+        
+        async function startSync() {
+            if (isRunning) return;
+            
+            isRunning = true;
+            const button = document.querySelector('.sync-button');
+            button.disabled = true;
+            button.textContent = 'Syncing...';
+            
+            // Clear logs
+            document.getElementById('logs').innerHTML = '';
+            
+            updateStatus('Starting synchronization...', 'info');
+            addLog('🚀 Starting full synchronization...');
             
             try {
-                const response = await fetch('/api/projects/sync');
-                const data = await response.json();
-                
-                if (data.success) {
-                    const projects = data.data || [];
-                    log(`📋 Найдено ${projects.length} проектов с sync тегом`, 'success');
-                    
-                    displayProjectsDebugInfo(projects, 'Проекты с меткой "eneca.work sync"');
-                } else {
-                    log(`❌ Ошибка получения проектов: ${data.error}`, 'error');
-                    displayDebugError(`Ошибка: ${data.error}`);
-                }
-            } catch (error) {
-                log(`❌ Ошибка запроса: ${error.message}`, 'error');
-                displayDebugError(`Ошибка сети: ${error.message}`);
-            }
-            
-            setLoading(false);
-        }
-
-        async function checkAllProjectTags() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🏷️ Получение всех тегов проектов...', 'info');
-            
-            try {
-                const response = await fetch('/api/projects/tags');
-                const data = await response.json();
-                
-                if (data.success) {
-                    const tags = data.data || [];
-                    log(`🏷️ Найдено ${tags.length} тегов проектов`, 'success');
-                    
-                    displayTagsDebugInfo(tags);
-                } else {
-                    log(`❌ Ошибка получения тегов: ${data.error}`, 'error');
-                    displayDebugError(`Ошибка: ${data.error}`);
-                }
-            } catch (error) {
-                log(`❌ Ошибка запроса: ${error.message}`, 'error');
-                displayDebugError(`Ошибка сети: ${error.message}`);
-            }
-            
-            setLoading(false);
-        }
-
-        async function checkSupabaseProjects() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🗄️ Получение проектов из Supabase...', 'info');
-            
-            try {
-                const response = await fetch('/api/supabase/projects');
-                const data = await response.json();
-                
-                if (data.success) {
-                    log(`🗄️ Проектов в Supabase: всего ${data.total_projects}, с external_id: ${data.external_projects}`, 'success');
-                    
-                    displaySupabaseDebugInfo(data);
-                } else {
-                    log(`❌ Ошибка получения проектов из Supabase: ${data.error}`, 'error');
-                    displayDebugError(`Ошибка: ${data.error}`);
-                }
-            } catch (error) {
-                log(`❌ Ошибка запроса: ${error.message}`, 'error');
-                displayDebugError(`Ошибка сети: ${error.message}`);
-            }
-            
-            setLoading(false);
-        }
-
-        async function testWorksectionConnection() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🔗 Тестирование подключения к Worksection...', 'info');
-            
-            try {
-                const response = await fetch('/api/projects', { method: 'GET' });
-                const data = await response.json();
-                
-                if (data.success) {
-                    log(`🔗 Подключение к Worksection работает! Найдено ${data.total} проектов`, 'success');
-                    
-                    displayWorksectionDebugInfo(data);
-                } else {
-                    log(`❌ Ошибка подключения к Worksection: ${data.error}`, 'error');
-                    displayDebugError(`Ошибка: ${data.error}`);
-                }
-            } catch (error) {
-                log(`❌ Ошибка запроса: ${error.message}`, 'error');
-                displayDebugError(`Ошибка сети: ${error.message}`);
-            }
-            
-            setLoading(false);
-        }
-
-        async function fullDiagnostic() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🔬 Запуск полной диагностики...', 'info');
-            
-            const debugInfo = document.getElementById('debugInfo');
-            debugInfo.innerHTML = `
-                <h4>🔬 Полная диагностика проблемы синхронизации</h4>
-                <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                    ⏳ Выполняется диагностика... Это может занять несколько секунд.
-                </div>
-            `;
-            
-            const results = {
-                worksection: null,
-                syncProjects: null,
-                tags: null,
-                supabase: null
-            };
-            
-            try {
-                // 1. Проверка подключения к Worksection
-                log('🔗 Шаг 1/4: Проверка подключения к Worksection...', 'info');
-                try {
-                    const wsResponse = await fetch('/api/projects');
-                    results.worksection = await wsResponse.json();
-                } catch (e) {
-                    results.worksection = { success: false, error: e.message };
-                }
-                
-                // 2. Проверка тегов
-                log('🏷️ Шаг 2/4: Проверка тегов проектов...', 'info');
-                try {
-                    const tagsResponse = await fetch('/api/projects/tags');
-                    results.tags = await tagsResponse.json();
-                } catch (e) {
-                    results.tags = { success: false, error: e.message };
-                }
-                
-                // 3. Проверка проектов с sync тегом
-                log('📋 Шаг 3/4: Проверка проектов с sync тегом...', 'info');
-                try {
-                    const syncResponse = await fetch('/api/projects/sync');
-                    results.syncProjects = await syncResponse.json();
-                } catch (e) {
-                    results.syncProjects = { success: false, error: e.message };
-                }
-                
-                // 4. Проверка Supabase
-                log('🗄️ Шаг 4/4: Проверка проектов в Supabase...', 'info');
-                try {
-                    const supabaseResponse = await fetch('/api/supabase/projects');
-                    results.supabase = await supabaseResponse.json();
-                } catch (e) {
-                    results.supabase = { success: false, error: e.message };
-                }
-                
-                // Отображение результатов диагностики
-                displayFullDiagnostic(results);
-                log('✅ Полная диагностика завершена', 'success');
-                
-            } catch (error) {
-                log(`❌ Ошибка диагностики: ${error.message}`, 'error');
-                debugInfo.innerHTML = `
-                    <h4>🔬 Полная диагностика</h4>
-                    <div class="no-data">❌ Ошибка выполнения диагностики: ${error.message}</div>
-                `;
-            }
-            
-            setLoading(false);
-        }
-
-        // === ФУНКЦИИ ОТОБРАЖЕНИЯ ОТЛАДОЧНОЙ ИНФОРМАЦИИ ===
-
-        function displayProjectsDebugInfo(projects, title) {
-            const debugInfo = document.getElementById('debugInfo');
-            
-            if (projects.length === 0) {
-                debugInfo.innerHTML = `
-                    <h4>${title}</h4>
-                    <div class="no-data">❌ Проекты с меткой "eneca.work sync" не найдены!</div>
-                    <div style="margin-top: 10px; font-size: 11px; color: #666;">
-                        <strong>Возможные причины:</strong><br>
-                        • В Worksection нет проектов с меткой "eneca.work sync"<br>
-                        • Метка создана неправильно (нужно точное соответствие)<br>
-                        • Проблемы с API подключением к Worksection<br>
-                        • Неправильные credentials в переменных окружения
-                    </div>
-                `;
-                return;
-            }
-            
-            let html = `<h4>${title} (${projects.length})</h4>`;
-            
-            projects.forEach(project => {
-                const tags = project.tags || {};
-                const tagsHtml = Object.entries(tags).map(([id, name]) => 
-                    `<span class="tag-item">${name} (ID: ${id})</span>`
-                ).join('');
-                
-                html += `
-                    <div class="project-card">
-                        <div class="project-name">📋 ${project.name}</div>
-                        <div class="project-details">
-                            <strong>ID:</strong> ${project.id} | 
-                            <strong>Статус:</strong> ${project.status || 'N/A'} | 
-                            <strong>Менеджер:</strong> ${project.manager_name || 'Не назначен'}
-                        </div>
-                        <div class="tag-list">
-                            <strong>Теги:</strong> ${tagsHtml || '<span style="color: #999;">Нет тегов</span>'}
-                        </div>
-                    </div>
-                `;
-            });
-            
-            debugInfo.innerHTML = html;
-        }
-
-        function displayTagsDebugInfo(tags) {
-            const debugInfo = document.getElementById('debugInfo');
-            
-            if (tags.length === 0) {
-                debugInfo.innerHTML = `
-                    <h4>Все теги проектов</h4>
-                    <div class="no-data">❌ Теги не найдены!</div>
-                `;
-                return;
-            }
-            
-            let html = `<h4>Все теги проектов (${tags.length})</h4>`;
-            
-            const syncTag = tags.find(tag => tag.title && tag.title.includes('eneca.work sync'));
-            
-            if (syncTag) {
-                html += `
-                    <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                        ✅ <strong>Метка "eneca.work sync" найдена!</strong><br>
-                        ID: ${syncTag.id}, Название: "${syncTag.title}"
-                    </div>
-                `;
-            } else {
-                html += `
-                    <div style="background: #f8d7da; border: 1px solid #f5c6cb; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                        ❌ <strong>Метка "eneca.work sync" НЕ найдена!</strong><br>
-                        Необходимо создать метку с точным названием "eneca.work sync"
-                    </div>
-                `;
-            }
-            
-            html += '<div style="max-height: 300px; overflow-y: auto;">';
-            tags.forEach(tag => {
-                const isSync = tag.title && tag.title.includes('eneca.work sync');
-                const bgColor = isSync ? '#d4edda' : '#f8f9fa';
-                const borderColor = isSync ? '#28a745' : '#dee2e6';
-                
-                html += `
-                    <div style="background: ${bgColor}; border: 1px solid ${borderColor}; padding: 8px; margin: 5px 0; border-radius: 4px;">
-                        <strong>${tag.title || 'Без названия'}</strong> (ID: ${tag.id})
-                        ${isSync ? ' 🎯' : ''}
-                    </div>
-                `;
-            });
-            html += '</div>';
-            
-            debugInfo.innerHTML = html;
-        }
-
-        function displaySupabaseDebugInfo(data) {
-            const debugInfo = document.getElementById('debugInfo');
-            
-            let html = `<h4>Проекты в Supabase</h4>`;
-            html += `
-                <div style="background: #e3f2fd; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                    <strong>Статистика:</strong><br>
-                    📊 Всего проектов: ${data.total_projects || 0}<br>
-                    🔗 С external_id (синхронизированных): ${data.external_projects || 0}<br>
-                    🆕 Локальных (созданных в eneca.work): ${(data.total_projects || 0) - (data.external_projects || 0)}
-                </div>
-            `;
-            
-            if (data.projects_with_external_id && data.projects_with_external_id.length > 0) {
-                html += `<h5>Синхронизированные проекты:</h5>`;
-                data.projects_with_external_id.forEach(project => {
-                    html += `
-                        <div class="project-card">
-                            <div class="project-name">📋 ${project.project_name}</div>
-                            <div class="project-details">
-                                <strong>ID:</strong> ${project.project_id}<br>
-                                <strong>External ID:</strong> ${project.external_id}<br>
-                                <strong>Источник:</strong> ${project.external_source}<br>
-                                <strong>Обновлено:</strong> ${project.external_updated_at ? new Date(project.external_updated_at).toLocaleString('ru-RU') : 'N/A'}
-                            </div>
-                        </div>
-                    `;
-                });
-            }
-            
-            debugInfo.innerHTML = html;
-        }
-
-        function displayWorksectionDebugInfo(data) {
-            const debugInfo = document.getElementById('debugInfo');
-            
-            let html = `<h4>Подключение к Worksection</h4>`;
-            html += `
-                <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                    ✅ <strong>Подключение работает!</strong><br>
-                    📊 Всего проектов в Worksection: ${data.total || 0}
-                </div>
-            `;
-            
-            if (data.projects && data.projects.length > 0) {
-                html += `<h5>Примеры проектов (первые ${data.projects.length}):</h5>`;
-                data.projects.forEach(project => {
-                    html += `
-                        <div class="project-card">
-                            <div class="project-name">📋 ${project.name}</div>
-                            <div class="project-details">
-                                <strong>ID:</strong> ${project.id} | 
-                                <strong>Статус:</strong> ${project.status || 'N/A'}
-                            </div>
-                        </div>
-                    `;
-                });
-            }
-            
-            debugInfo.innerHTML = html;
-        }
-
-        function displayDebugError(errorMessage) {
-            const debugInfo = document.getElementById('debugInfo');
-            debugInfo.innerHTML = `
-                <div class="no-data">
-                    ❌ ${errorMessage}
-                </div>
-            `;
-        }
-
-        function displayFullDiagnostic(results) {
-            const debugInfo = document.getElementById('debugInfo');
-            
-            let html = `<h4>🔬 Результаты полной диагностики</h4>`;
-            
-            // Анализ результатов
-            const issues = [];
-            const recommendations = [];
-            
-            // 1. Анализ подключения к Worksection
-            if (!results.worksection?.success) {
-                issues.push('❌ Нет подключения к Worksection API');
-                recommendations.push('Проверьте переменные окружения WORKSECTION_DOMAIN и WORKSECTION_HASH');
-            } else {
-                html += `
-                    <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                        ✅ <strong>Подключение к Worksection работает</strong><br>
-                        📊 Всего проектов: ${results.worksection.total || 0}
-                    </div>
-                `;
-            }
-            
-            // 2. Анализ тегов
-            if (!results.tags?.success) {
-                issues.push('❌ Не удается получить теги проектов');
-                recommendations.push('Проверьте права доступа к API Worksection');
-            } else {
-                const tags = results.tags.data || [];
-                const syncTag = tags.find(tag => tag.title && tag.title.includes('eneca.work sync'));
-                
-                if (!syncTag) {
-                    issues.push('❌ Метка "eneca.work sync" не найдена');
-                    recommendations.push('Создайте метку "eneca.work sync" в настройках проектов Worksection');
-                    
-                    html += `
-                        <div style="background: #f8d7da; border: 1px solid #f5c6cb; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                            ❌ <strong>Метка "eneca.work sync" НЕ найдена!</strong><br>
-                            📊 Всего тегов: ${tags.length}<br>
-                            💡 Необходимо создать метку с точным названием "eneca.work sync"
-                        </div>
-                    `;
-                } else {
-                    html += `
-                        <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                            ✅ <strong>Метка "eneca.work sync" найдена!</strong><br>
-                            🏷️ ID метки: ${syncTag.id}, Название: "${syncTag.title}"
-                        </div>
-                    `;
-                }
-            }
-            
-            // 3. Анализ проектов с sync тегом
-            if (!results.syncProjects?.success) {
-                issues.push('❌ Ошибка получения проектов с sync тегом');
-                recommendations.push('Проверьте логи сервера для детальной информации об ошибке');
-            } else {
-                const syncProjects = results.syncProjects.data || [];
-                
-                if (syncProjects.length === 0) {
-                    issues.push('❌ Нет проектов с меткой "eneca.work sync"');
-                    recommendations.push('Добавьте метку "eneca.work sync" к нужным проектам в Worksection');
-                    
-                    html += `
-                        <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                            ⚠️ <strong>Проекты с меткой "eneca.work sync" не найдены</strong><br>
-                            📊 Проектов с sync тегом: 0<br>
-                            💡 Добавьте метку к проектам в Worksection
-                        </div>
-                    `;
-                } else {
-                    html += `
-                        <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                            ✅ <strong>Найдены проекты для синхронизации!</strong><br>
-                            📊 Проектов с sync тегом: ${syncProjects.length}
-                        </div>
-                    `;
-                    
-                    html += `<h5>Проекты готовые к синхронизации:</h5>`;
-                    syncProjects.forEach(project => {
-                        html += `
-                            <div class="project-card">
-                                <div class="project-name">📋 ${project.name}</div>
-                                <div class="project-details">
-                                    <strong>ID:</strong> ${project.id} | 
-                                    <strong>Менеджер:</strong> ${project.manager_name || 'Не назначен'}
-                                </div>
-                            </div>
-                        `;
-                    });
-                }
-            }
-            
-            // 4. Анализ Supabase
-            if (!results.supabase?.success) {
-                issues.push('❌ Ошибка подключения к Supabase');
-                recommendations.push('Проверьте переменные окружения SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY');
-            } else {
-                html += `
-                    <div style="background: #e3f2fd; padding: 10px; margin: 10px 0; border-radius: 4px;">
-                        <strong>Статистика Supabase:</strong><br>
-                        📊 Всего проектов: ${results.supabase.total_projects || 0}<br>
-                        🔗 Синхронизированных: ${results.supabase.external_projects || 0}<br>
-                        🆕 Локальных: ${results.supabase.local_projects || 0}
-                    </div>
-                `;
-            }
-            
-            // Итоговый анализ и рекомендации
-            if (issues.length === 0) {
-                html += `
-                    <div style="background: #d4edda; border: 2px solid #28a745; padding: 15px; margin: 15px 0; border-radius: 6px;">
-                        🎉 <strong>Все проверки прошли успешно!</strong><br>
-                        ✅ Система готова к синхронизации.<br>
-                        💡 Нажмите "🚀 Полная синхронизация" для начала процесса.
-                    </div>
-                `;
-            } else {
-                html += `
-                    <div style="background: #f8d7da; border: 2px solid #dc3545; padding: 15px; margin: 15px 0; border-radius: 6px;">
-                        ⚠️ <strong>Обнаружены проблемы (${issues.length}):</strong><br>
-                        ${issues.map(issue => `• ${issue}`).join('<br>')}
-                    </div>
-                `;
-                
-                html += `
-                    <div style="background: #e3f2fd; border: 1px solid #2196f3; padding: 15px; margin: 15px 0; border-radius: 6px;">
-                        💡 <strong>Рекомендации по устранению:</strong><br>
-                        ${recommendations.map((rec, i) => `${i + 1}. ${rec}`).join('<br>')}
-                    </div>
-                `;
-            }
-            
-            debugInfo.innerHTML = html;
-        }
-
-        // Новые диагностические функции
-        async function checkSyncHealth() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🩺 Проверяем здоровье системы синхронизации...');
-
-            try {
-                const response = await fetch('/api/health/sync-status');
-                const data = await response.json();
-                
-                if (data.success) {
-                    log(`✅ Проверка здоровья завершена. Общий статус: ${data.overall_health}`, 'success');
-                    displayHealthInfo(data);
-                } else {
-                    log(`❌ Ошибка проверки здоровья: ${data.error}`, 'error');
-                }
-            } catch (error) {
-                log(`❌ Ошибка проверки здоровья: ${error.message}`, 'error');
-            } finally {
-                setLoading(false);
-            }
-        }
-
-        async function validateHierarchy() {
-            if (isLoading) return;
-            setLoading(true);
-            log('🔍 Проверяем целостность иерархии данных...');
-
-            try {
-                const response = await fetch('/api/validate/hierarchy');
-                const data = await response.json();
-                
-                if (data.success) {
-                    const issuesCount = data.issues ? data.issues.length : 0;
-                    if (issuesCount === 0) {
-                        log('✅ Целостность данных в порядке', 'success');
-                    } else {
-                        log(`⚠️ Найдено ${issuesCount} проблем целостности`, 'warning');
-                    }
-                    displayValidationInfo(data);
-                } else {
-                    log(`❌ Ошибка проверки целостности: ${data.error}`, 'error');
-                }
-            } catch (error) {
-                log(`❌ Ошибка проверки целостности: ${error.message}`, 'error');
-            } finally {
-                setLoading(false);
-            }
-        }
-
-        async function getSystemReport() {
-            if (isLoading) return;
-            setLoading(true);
-            log('📈 Генерируем отчёт о состоянии системы...');
-
-            try {
-                const response = await fetch('/api/report/system-status');
-                const data = await response.json();
-                
-                if (data.success) {
-                    log(`✅ Отчёт сгенерирован за ${data.generation_time_ms}мс`, 'success');
-                    displaySystemReport(data);
-                } else {
-                    log(`❌ Ошибка генерации отчёта: ${data.error}`, 'error');
-                }
-            } catch (error) {
-                log(`❌ Ошибка генерации отчёта: ${error.message}`, 'error');
-            } finally {
-                setLoading(false);
-            }
-        }
-
-        async function cleanupOrphaned() {
-            if (isLoading) return;
-            
-            const confirmed = confirm('Запустить очистку orphaned записей в пробном режиме? (фактического удаления не будет)');
-            if (!confirmed) return;
-            
-            setLoading(true);
-            log('🧹 Запускаем очистку orphaned записей (пробный режим)...');
-
-            try {
-                const response = await fetch('/api/maintenance/cleanup-orphaned', {
+                const response = await fetch('/api/sync', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ dryRun: true })
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
                 });
-                const data = await response.json();
                 
-                if (data.success) {
-                    const wouldDelete = data.would_delete;
-                    const total = wouldDelete.stages + wouldDelete.objects + wouldDelete.sections;
-                    log(`✅ Пробная очистка завершена. Будет удалено: ${total} записей`, 'success');
-                    displayCleanupInfo(data);
+                const result = await response.json();
+                
+                if (result.success) {
+                    updateStatus(`Sync completed successfully in ${result.duration}ms`, 'success');
+                    updateStats(result.summary);
+                    
+                    // Show detailed logs
+                    if (result.logs) {
+                        result.logs.forEach(log => {
+                            let level = 'info';
+                            if (log.level) level = log.level;
+                            else if (log.includes('❌')) level = 'error';
+                            else if (log.includes('✅')) level = 'success';
+                            else if (log.includes('⚠️')) level = 'warning';
+                            
+                            addLog(log.message || log, level);
+                        });
+                    }
+                    
+                    addLog(`✅ Synchronization completed successfully!`, 'success');
+                    
                 } else {
-                    log(`❌ Ошибка очистки: ${data.error}`, 'error');
+                    updateStatus(`Sync failed: ${result.error}`, 'error');
+                    addLog(`❌ Sync failed: ${result.error}`, 'error');
                 }
+                
             } catch (error) {
-                log(`❌ Ошибка очистки: ${error.message}`, 'error');
+                updateStatus(`Sync failed: ${error.message}`, 'error');
+                addLog(`❌ Sync failed: ${error.message}`, 'error');
             } finally {
-                setLoading(false);
+                isRunning = false;
+                button.disabled = false;
+                button.textContent = 'Start Full Sync';
             }
         }
-
-        // Функции отображения диагностической информации
-        function displayHealthInfo(data) {
-            const diagnosticInfo = document.getElementById('diagnosticInfo');
+        
+        // Auto-refresh logs every 2 seconds during sync
+        setInterval(async () => {
+            if (!isRunning) return;
             
-            const statusColors = {
-                healthy: '#28a745',
-                warning: '#ffc107',
-                unhealthy: '#fd7e14',
-                critical: '#dc3545'
-            };
-            
-            const statusEmojis = {
-                healthy: '✅',
-                warning: '⚠️',
-                unhealthy: '🔶',
-                critical: '❌'
-            };
-
-            let html = `<h4>🩺 Результаты проверки здоровья системы</h4>`;
-            
-            html += `
-                <div style="background: ${data.overall_health === 'healthy' ? '#d4edda' : '#f8d7da'}; 
-                            border: 1px solid ${statusColors[data.overall_health]}; 
-                            padding: 15px; margin: 10px 0; border-radius: 6px;">
-                    ${statusEmojis[data.overall_health]} <strong>Общий статус: ${data.overall_health.toUpperCase()}</strong><br>
-                    📊 Проверок: ${data.summary.total_checks}, 
-                    ✅ Здоровых: ${data.summary.healthy}, 
-                    ⚠️ Предупреждений: ${data.summary.warnings}, 
-                    ❌ Критических: ${data.summary.critical}
-                </div>
-            `;
-
-            html += `<h5>Детальные проверки:</h5>`;
-            data.checks.forEach(check => {
-                html += `
-                    <div style="border-left: 4px solid ${statusColors[check.status]}; 
-                                padding: 10px; margin: 10px 0; background: #f8f9fa;">
-                        ${statusEmojis[check.status]} <strong>${check.name}</strong><br>
-                        ${check.message}
-                    </div>
-                `;
-            });
-
-            diagnosticInfo.innerHTML = html;
-        }
-
-        function displayValidationInfo(data) {
-            const diagnosticInfo = document.getElementById('diagnosticInfo');
-            
-            let html = `<h4>🔍 Результаты проверки целостности данных</h4>`;
-            
-            if (data.issues.length === 0) {
-                html += `
-                    <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 15px; margin: 10px 0; border-radius: 6px;">
-                        ✅ <strong>Все проверки целостности прошли успешно!</strong><br>
-                        Orphaned записи не найдены, дубликаты external_id отсутствуют.
-                    </div>
-                `;
-            } else {
-                html += `
-                    <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; margin: 10px 0; border-radius: 6px;">
-                        ⚠️ <strong>Найдено ${data.issues.length} проблем целостности:</strong><br>
-                        ${data.issues.map(issue => `• ${issue}`).join('<br>')}
-                    </div>
-                `;
-            }
-
-            html += `
-                <div style="background: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 6px;">
-                    <strong>📊 Статистика данных:</strong><br>
-                    🏢 Проекты: ${data.statistics.projects}<br>
-                    🎯 Стадии: ${data.statistics.stages} (orphaned: ${data.statistics.orphaned_stages})<br>
-                    📦 Объекты: ${data.statistics.objects} (orphaned: ${data.statistics.orphaned_objects})<br>
-                    📑 Разделы: ${data.statistics.sections} (orphaned: ${data.statistics.orphaned_sections})<br>
-                    🔗 Дубликаты external_id: ${data.statistics.duplicate_external_ids}
-                </div>
-            `;
-
-            diagnosticInfo.innerHTML = html;
-        }
-
-        function displaySystemReport(data) {
-            const diagnosticInfo = document.getElementById('diagnosticInfo');
-            
-            let html = `<h4>📈 Отчёт о состоянии системы</h4>`;
-            
-            const healthScore = data.summary.health_score;
-            const healthColor = healthScore >= 80 ? '#28a745' : healthScore >= 60 ? '#ffc107' : '#dc3545';
-            const healthEmoji = healthScore >= 80 ? '🟢' : healthScore >= 60 ? '🟡' : '🔴';
-
-            html += `
-                <div style="background: linear-gradient(135deg, ${healthColor}15, ${healthColor}05); 
-                            border: 1px solid ${healthColor}; padding: 15px; margin: 10px 0; border-radius: 6px;">
-                    ${healthEmoji} <strong>Индекс здоровья системы: ${healthScore}/100</strong><br>
-                    📊 Всего сущностей: ${data.summary.total_entities}<br>
-                    🎯 Уровней иерархии: ${data.summary.hierarchy_levels}<br>
-                    ⚡ Производительность: ${data.summary.performance || 0} операций/сек
-                </div>
-            `;
-
-            html += `<h5>📊 Покрытие синхронизацией:</h5>`;
-            const coverage = data.summary.sync_coverage;
-            Object.entries(coverage).forEach(([entity, percent]) => {
-                const emoji = percent === 100 ? '🟢' : percent >= 50 ? '🟡' : '🔴';
-                html += `
-                    <div style="display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #eee;">
-                        <span>${emoji} ${entity.charAt(0).toUpperCase() + entity.slice(1)}</span>
-                        <span><strong>${percent}%</strong></span>
-                    </div>
-                `;
-            });
-
-            if (data.recommendations && data.recommendations.length > 0) {
-                html += `<h5>💡 Рекомендации:</h5>`;
-                data.recommendations.forEach((rec, index) => {
-                    const priorityEmoji = rec.priority === 'high' ? '🔴' : rec.priority === 'medium' ? '🟡' : '🟢';
-                    html += `
-                        <div style="border-left: 3px solid ${rec.priority === 'high' ? '#dc3545' : rec.priority === 'medium' ? '#ffc107' : '#28a745'}; 
-                                    padding: 10px; margin: 5px 0; background: #f8f9fa;">
-                            ${priorityEmoji} <strong>${rec.message}</strong><br>
-                            <small>💡 ${rec.action}</small>
-                        </div>
-                    `;
-                });
-            }
-
-            diagnosticInfo.innerHTML = html;
-        }
-
-        function displayCleanupInfo(data) {
-            const diagnosticInfo = document.getElementById('diagnosticInfo');
-            
-            let html = `<h4>🧹 Результаты очистки orphaned записей</h4>`;
-            
-            if (data.dry_run) {
-                const wouldDelete = data.would_delete;
-                const total = wouldDelete.stages + wouldDelete.objects + wouldDelete.sections;
+            try {
+                const response = await fetch('/api/logs');
+                const logs = await response.json();
                 
-                if (total === 0) {
-                    html += `
-                        <div style="background: #d4edda; border: 1px solid #c3e6cb; padding: 15px; margin: 10px 0; border-radius: 6px;">
-                            ✅ <strong>Orphaned записи не найдены!</strong><br>
-                            Система находится в чистом состоянии.
-                        </div>
-                    `;
-                } else {
-                    html += `
-                        <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; margin: 10px 0; border-radius: 6px;">
-                            ⚠️ <strong>Найдено ${total} orphaned записей для очистки:</strong><br>
-                            🎯 Стадии: ${wouldDelete.stages}<br>
-                            📦 Объекты: ${wouldDelete.objects}<br>
-                            📑 Разделы: ${wouldDelete.sections}
-                        </div>
-                    `;
-                }
+                const logsDiv = document.getElementById('logs');
+                logsDiv.innerHTML = '';
+                
+                logs.forEach(log => {
+                    const level = log.level || 'info';
+                    const entry = document.createElement('div');
+                    entry.className = `log-entry ${level}`;
+                    entry.textContent = `[${new Date(log.timestamp).toLocaleTimeString()}] ${log.message}`;
+                    logsDiv.appendChild(entry);
+                });
+                
+                logsDiv.scrollTop = logsDiv.scrollHeight;
+                
+            } catch (error) {
+                console.error('Error fetching logs:', error);
             }
-
-            diagnosticInfo.innerHTML = html;
-        }
-
-        // Автоматическая проверка статуса при загрузке
-        document.addEventListener('DOMContentLoaded', () => {
-            checkStatus();
-        });
+        }, 2000);
     </script>
 </body>
 </html> 
