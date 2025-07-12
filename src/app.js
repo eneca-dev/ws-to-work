@@ -403,13 +403,65 @@ class WSToWorkApp {
         // API для синхронизации проектов с автоматическим созданием новых
         this.app.post('/api/projects/sync-auto', async (req, res) => {
             try {
+                writeLogToFile('🔄 Запуск автоматической синхронизации проектов...', 'sync');
                 console.log('🔄 Запуск автоматической синхронизации проектов...');
+                
+                // Создаем вспомогательные функции для обработки результата
+                const validateSyncResult = (result, entityType) => {
+                    return result && result.success !== false;
+                };
+                
+                const collectStats = (result, entityType) => {
+                    if (!validateSyncResult(result, entityType)) {
+                        return { 
+                            created: 0, 
+                            updated: 0, 
+                            unchanged: 0, 
+                            errors: 1
+                        };
+                    }
+                    
+                    const summary = result.summary || {};
+                    const data = result.data || {};
+                    
+                    return {
+                        created: summary.created || data.created?.length || 0,
+                        updated: summary.updated || data.updated?.length || 0,
+                        unchanged: summary.unchanged || data.unchanged?.length || 0,
+                        deleted: summary.deleted || data.deleted?.length || 0,
+                        errors: summary.errors || data.errors?.length || 0
+                    };
+                };
                 
                 const result = await syncProjectsToSupabase();
                 
-                res.json(result);
+                // Обрабатываем результат через collectStats для единообразия
+                const stats = collectStats(result, 'Project');
+                
+                // Формируем ответ в том же формате, что и runFullSync
+                const response = {
+                    success: result.success,
+                    summary: stats,
+                    data: {
+                        created: result.created || [],
+                        updated: result.updated || [],
+                        unchanged: result.unchanged || [],
+                        skipped: result.skipped || [],
+                        errors: result.errors || []
+                    },
+                    assignment_stats: result.assignment_stats,
+                    metadata: {
+                        timestamp: new Date().toISOString(),
+                        entity_type: 'Project',
+                        total_processed: (result.created?.length || 0) + (result.updated?.length || 0) + (result.unchanged?.length || 0) + (result.skipped?.length || 0) + (result.errors?.length || 0)
+                    }
+                };
+                
+                writeLogToFile(`✅ Автоматическая синхронизация проектов завершена: создано ${stats.created}, обновлено ${stats.updated}, без изменений ${stats.unchanged}, ошибок ${stats.errors}`, 'sync');
+                res.json(response);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка автоматической синхронизации проектов: ${error.message}`, 'sync');
                 console.error('❌ Ошибка автоматической синхронизации:', error.message);
                 res.status(500).json({
                     success: false,
@@ -421,13 +473,65 @@ class WSToWorkApp {
         // API для обновления проектов (название и менеджер)
         this.app.post('/api/projects/update', async (req, res) => {
             try {
+                writeLogToFile('🔄 Запуск обновления проектов...', 'sync');
                 console.log('🔄 Запуск обновления проектов...');
+                
+                // Создаем вспомогательные функции для обработки результата
+                const validateSyncResult = (result, entityType) => {
+                    return result && result.success !== false;
+                };
+                
+                const collectStats = (result, entityType) => {
+                    if (!validateSyncResult(result, entityType)) {
+                        return { 
+                            created: 0, 
+                            updated: 0, 
+                            unchanged: 0, 
+                            errors: 1
+                        };
+                    }
+                    
+                    const summary = result.summary || {};
+                    const data = result.data || {};
+                    
+                    return {
+                        created: summary.created || data.created?.length || 0,
+                        updated: summary.updated || data.updated?.length || 0,
+                        unchanged: summary.unchanged || data.unchanged?.length || 0,
+                        deleted: summary.deleted || data.deleted?.length || 0,
+                        errors: summary.errors || data.errors?.length || 0
+                    };
+                };
                 
                 const result = await updateProjectsFromWorksection();
                 
-                res.json(result);
+                // Обрабатываем результат через collectStats для единообразия
+                const stats = collectStats(result, 'Project');
+                
+                // Формируем ответ в том же формате, что и runFullSync
+                const response = {
+                    success: result.success,
+                    summary: stats,
+                    data: {
+                        created: result.created || [],
+                        updated: result.updated || [],
+                        unchanged: result.unchanged || [],
+                        skipped: result.skipped || [],
+                        errors: result.errors || []
+                    },
+                    assignment_stats: result.assignment_stats,
+                    metadata: {
+                        timestamp: new Date().toISOString(),
+                        entity_type: 'Project',
+                        total_processed: (result.created?.length || 0) + (result.updated?.length || 0) + (result.unchanged?.length || 0) + (result.skipped?.length || 0) + (result.errors?.length || 0)
+                    }
+                };
+                
+                writeLogToFile(`✅ Обновление проектов завершено: создано ${stats.created}, обновлено ${stats.updated}, без изменений ${stats.unchanged}, ошибок ${stats.errors}`, 'sync');
+                res.json(response);
 
             } catch (error) {
+                writeLogToFile(`❌ Ошибка обновления проектов: ${error.message}`, 'sync');
                 console.error('❌ Ошибка обновления проектов:', error.message);
                 res.status(500).json({
                     success: false,
@@ -442,10 +546,59 @@ class WSToWorkApp {
                 writeLogToFile('🎯 Запуск синхронизации стадий...', 'sync');
                 console.log('🎯 Запуск синхронизации стадий...');
                 
+                // Создаем вспомогательные функции для обработки результата
+                const validateSyncResult = (result, entityType) => {
+                    return result && result.success !== false;
+                };
+                
+                const collectStats = (result, entityType) => {
+                    if (!validateSyncResult(result, entityType)) {
+                        return { 
+                            created: 0, 
+                            updated: 0, 
+                            unchanged: 0, 
+                            errors: 1
+                        };
+                    }
+                    
+                    const summary = result.summary || {};
+                    const data = result.data || {};
+                    
+                    return {
+                        created: summary.created || data.created?.length || 0,
+                        updated: summary.updated || data.updated?.length || 0,
+                        unchanged: summary.unchanged || data.unchanged?.length || 0,
+                        deleted: summary.deleted || data.deleted?.length || 0,
+                        errors: summary.errors || data.errors?.length || 0
+                    };
+                };
+                
                 const result = await syncStagesFromWorksection();
                 
-                writeLogToFile(`✅ Синхронизация стадий завершена: ${JSON.stringify(result.summary || result)}`, 'sync');
-                res.json(result);
+                // Обрабатываем результат через collectStats для единообразия
+                const stats = collectStats(result, 'Stage');
+                
+                // Формируем ответ в том же формате, что и runFullSync
+                const response = {
+                    success: result.success,
+                    summary: stats,
+                    data: {
+                        created: result.created || [],
+                        updated: result.updated || [],
+                        unchanged: result.unchanged || [],
+                        skipped: result.skipped || [],
+                        errors: result.errors || []
+                    },
+                    assignment_stats: result.assignment_stats,
+                    metadata: {
+                        timestamp: new Date().toISOString(),
+                        entity_type: 'Stage',
+                        total_processed: (result.created?.length || 0) + (result.updated?.length || 0) + (result.unchanged?.length || 0) + (result.skipped?.length || 0) + (result.errors?.length || 0)
+                    }
+                };
+                
+                writeLogToFile(`✅ Синхронизация стадий завершена: создано ${stats.created}, обновлено ${stats.updated}, без изменений ${stats.unchanged}, ошибок ${stats.errors}`, 'sync');
+                res.json(response);
 
             } catch (error) {
                 writeLogToFile(`❌ Ошибка синхронизации стадий: ${error.message}`, 'sync');
@@ -463,10 +616,59 @@ class WSToWorkApp {
                 writeLogToFile('📦 Запуск синхронизации объектов...', 'sync');
                 console.log('📦 Запуск синхронизации объектов...');
                 
+                // Создаем вспомогательные функции для обработки результата
+                const validateSyncResult = (result, entityType) => {
+                    return result && result.success !== false;
+                };
+                
+                const collectStats = (result, entityType) => {
+                    if (!validateSyncResult(result, entityType)) {
+                        return { 
+                            created: 0, 
+                            updated: 0, 
+                            unchanged: 0, 
+                            errors: 1
+                        };
+                    }
+                    
+                    const summary = result.summary || {};
+                    const data = result.data || {};
+                    
+                    return {
+                        created: summary.created || data.created?.length || 0,
+                        updated: summary.updated || data.updated?.length || 0,
+                        unchanged: summary.unchanged || data.unchanged?.length || 0,
+                        deleted: summary.deleted || data.deleted?.length || 0,
+                        errors: summary.errors || data.errors?.length || 0
+                    };
+                };
+                
                 const result = await syncObjectsFromWorksection();
                 
-                writeLogToFile(`✅ Синхронизация объектов завершена: ${JSON.stringify(result.summary || result)}`, 'sync');
-                res.json(result);
+                // Обрабатываем результат через collectStats для единообразия
+                const stats = collectStats(result, 'Object');
+                
+                // Формируем ответ в том же формате, что и runFullSync
+                const response = {
+                    success: result.success,
+                    summary: stats,
+                    data: {
+                        created: result.created || [],
+                        updated: result.updated || [],
+                        unchanged: result.unchanged || [],
+                        skipped: result.skipped || [],
+                        errors: result.errors || []
+                    },
+                    assignment_stats: result.assignment_stats,
+                    metadata: {
+                        timestamp: new Date().toISOString(),
+                        entity_type: 'Object',
+                        total_processed: (result.created?.length || 0) + (result.updated?.length || 0) + (result.unchanged?.length || 0) + (result.skipped?.length || 0) + (result.errors?.length || 0)
+                    }
+                };
+                
+                writeLogToFile(`✅ Синхронизация объектов завершена: создано ${stats.created}, обновлено ${stats.updated}, без изменений ${stats.unchanged}, ошибок ${stats.errors}`, 'sync');
+                res.json(response);
 
             } catch (error) {
                 writeLogToFile(`❌ Ошибка синхронизации объектов: ${error.message}`, 'sync');
@@ -484,10 +686,59 @@ class WSToWorkApp {
                 writeLogToFile('📑 Запуск синхронизации разделов...', 'sync');
                 console.log('📑 Запуск синхронизации разделов...');
                 
+                // Создаем вспомогательные функции для обработки результата
+                const validateSyncResult = (result, entityType) => {
+                    return result && result.success !== false;
+                };
+                
+                const collectStats = (result, entityType) => {
+                    if (!validateSyncResult(result, entityType)) {
+                        return { 
+                            created: 0, 
+                            updated: 0, 
+                            unchanged: 0, 
+                            errors: 1
+                        };
+                    }
+                    
+                    const summary = result.summary || {};
+                    const data = result.data || {};
+                    
+                    return {
+                        created: summary.created || data.created?.length || 0,
+                        updated: summary.updated || data.updated?.length || 0,
+                        unchanged: summary.unchanged || data.unchanged?.length || 0,
+                        deleted: summary.deleted || data.deleted?.length || 0,
+                        errors: summary.errors || data.errors?.length || 0
+                    };
+                };
+                
                 const result = await syncSectionsFromWorksection();
                 
-                writeLogToFile(`✅ Синхронизация разделов завершена: ${JSON.stringify(result.summary || result)}`, 'sync');
-                res.json(result);
+                // Обрабатываем результат через collectStats для единообразия
+                const stats = collectStats(result, 'Section');
+                
+                // Формируем ответ в том же формате, что и runFullSync
+                const response = {
+                    success: result.success,
+                    summary: stats,
+                    data: {
+                        created: result.created || [],
+                        updated: result.updated || [],
+                        unchanged: result.unchanged || [],
+                        skipped: result.skipped || [],
+                        errors: result.errors || []
+                    },
+                    assignment_stats: result.assignment_stats,
+                    metadata: {
+                        timestamp: new Date().toISOString(),
+                        entity_type: 'Section',
+                        total_processed: (result.created?.length || 0) + (result.updated?.length || 0) + (result.unchanged?.length || 0) + (result.skipped?.length || 0) + (result.errors?.length || 0)
+                    }
+                };
+                
+                writeLogToFile(`✅ Синхронизация разделов завершена: создано ${stats.created}, обновлено ${stats.updated}, без изменений ${stats.unchanged}, ошибок ${stats.errors}`, 'sync');
+                res.json(response);
 
             } catch (error) {
                 writeLogToFile(`❌ Ошибка синхронизации разделов: ${error.message}`, 'sync');
