@@ -11,7 +11,17 @@ async function syncObjects(stats) {
     for (const project of supaProjects) {
       const wsTasks = await worksection.getProjectTasks(project.external_id);
       
-      for (const wsTask of wsTasks) {
+      // Фильтруем задачи начинающиеся с "!"
+      const filteredTasks = wsTasks.filter(task => {
+        if (task.name && task.name.startsWith('!')) {
+          logger.info(`🚫 Skipping object starting with "!": ${task.name}`);
+          stats.objects.skipped = (stats.objects.skipped || 0) + 1;
+          return false;
+        }
+        return true;
+      });
+      
+      for (const wsTask of filteredTasks) {
         if (wsTask.status !== 'active') continue;
         
         const existing = existingObjects.find(o => 
@@ -39,14 +49,29 @@ async function syncObjects(stats) {
             external_updated_at: new Date().toISOString()
           };
           
-          // Find and assign responsible
+          // Find and assign responsible using enhanced search
           const responsible = await findUserByEmail(wsTask.user_to?.email, stats);
           if (responsible) {
             updateData.object_responsible = responsible.user_id;
+            logger.info(`👤 Assigned responsible to object "${wsTask.name}": ${responsible.first_name} ${responsible.last_name}`);
           }
           
           await supabase.updateObject(existing.object_id, updateData);
           stats.objects.updated++;
+          
+          // Добавляем в отчет
+          if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+          stats.detailed_report.actions.push({
+            action: 'updated',
+            type: 'object',
+            id: wsTask.id,
+            name: wsTask.name,
+            project: project.project_name,
+            timestamp: new Date().toISOString(),
+            responsible_assigned: !!responsible,
+            responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null
+          });
+          
           logger.success(`Updated object: ${wsTask.name}`);
           
         } else {
@@ -63,14 +88,29 @@ async function syncObjects(stats) {
             external_updated_at: new Date().toISOString()
           };
           
-          // Find and assign responsible
+          // Find and assign responsible using enhanced search
           const responsible = await findUserByEmail(wsTask.user_to?.email, stats);
           if (responsible) {
             objectData.object_responsible = responsible.user_id;
+            logger.info(`👤 Assigned responsible to new object "${wsTask.name}": ${responsible.first_name} ${responsible.last_name}`);
           }
           
           await supabase.createObject(objectData);
           stats.objects.created++;
+          
+          // Добавляем в отчет
+          if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+          stats.detailed_report.actions.push({
+            action: 'created',
+            type: 'object',
+            id: wsTask.id,
+            name: wsTask.name,
+            project: project.project_name,
+            timestamp: new Date().toISOString(),
+            responsible_assigned: !!responsible,
+            responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null
+          });
+          
           logger.success(`Created object: ${wsTask.name}`);
         }
       }
@@ -101,7 +141,17 @@ async function syncSections(stats) {
         
         if (!object) continue;
         
-        for (const wsSubtask of wsTask.child) {
+        // Фильтруем подзадачи начинающиеся с "!"
+        const filteredSubtasks = wsTask.child.filter(subtask => {
+          if (subtask.name && subtask.name.startsWith('!')) {
+            logger.info(`🚫 Skipping section starting with "!": ${subtask.name}`);
+            stats.sections.skipped = (stats.sections.skipped || 0) + 1;
+            return false;
+          }
+          return true;
+        });
+        
+        for (const wsSubtask of filteredSubtasks) {
           if (wsSubtask.status !== 'active') continue;
           
           const existing = existingSections.find(s => 
@@ -118,14 +168,30 @@ async function syncSections(stats) {
               external_updated_at: new Date().toISOString()
             };
             
-            // Find and assign responsible
+            // Find and assign responsible using enhanced search
             const responsible = await findUserByEmail(wsSubtask.user_to?.email, stats);
             if (responsible) {
               updateData.section_responsible = responsible.user_id;
+              logger.info(`👤 Assigned responsible to section "${wsSubtask.name}": ${responsible.first_name} ${responsible.last_name}`);
             }
             
             await supabase.updateSection(existing.section_id, updateData);
             stats.sections.updated++;
+            
+            // Добавляем в отчет
+            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            stats.detailed_report.actions.push({
+              action: 'updated',
+              type: 'section',
+              id: wsSubtask.id,
+              name: wsSubtask.name,
+              object: object.object_name,
+              project: project.project_name,
+              timestamp: new Date().toISOString(),
+              responsible_assigned: !!responsible,
+              responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null
+            });
+            
             logger.success(`Updated section: ${wsSubtask.name}`);
             
           } else {
@@ -142,14 +208,30 @@ async function syncSections(stats) {
               external_updated_at: new Date().toISOString()
             };
             
-            // Find and assign responsible
+            // Find and assign responsible using enhanced search
             const responsible = await findUserByEmail(wsSubtask.user_to?.email, stats);
             if (responsible) {
               sectionData.section_responsible = responsible.user_id;
+              logger.info(`👤 Assigned responsible to new section "${wsSubtask.name}": ${responsible.first_name} ${responsible.last_name}`);
             }
             
             await supabase.createSection(sectionData);
             stats.sections.created++;
+            
+            // Добавляем в отчет
+            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            stats.detailed_report.actions.push({
+              action: 'created',
+              type: 'section',
+              id: wsSubtask.id,
+              name: wsSubtask.name,
+              object: object.object_name,
+              project: project.project_name,
+              timestamp: new Date().toISOString(),
+              responsible_assigned: !!responsible,
+              responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null
+            });
+            
             logger.success(`Created section: ${wsSubtask.name}`);
           }
         }
@@ -166,22 +248,39 @@ async function findUserByEmail(email, stats) {
   if (!email) return null;
   
   try {
+    // Инициализируем статистику поиска пользователей если её нет
+    if (!stats.user_search) {
+      stats.user_search = {
+        total_searches: 0,
+        successful_by_email: 0,
+        successful_by_email_part: 0,
+        successful_by_name: 0,
+        successful_by_name_parts: 0,
+        successful_by_fuzzy: 0,
+        failed: 0,
+        errors: 0,
+        empty_queries: 0,
+        searches: []
+      };
+    }
+    
     stats.assignments.attempted++;
     
-    const user = await supabase.findUserByEmail(email);
+    // Используем новую улучшенную функцию поиска
+    const user = await supabase.findUser(email, stats);
     if (user) {
       stats.assignments.successful++;
-      logger.info(`Found user: ${user.first_name} ${user.last_name} (${email})`);
+      logger.info(`👤 Found user: ${user.first_name} ${user.last_name} (${email})`);
       return user;
     }
     
     stats.assignments.failed++;
-    logger.warning(`User not found: ${email}`);
+    logger.warning(`👤 User not found: ${email}`);
     return null;
     
   } catch (error) {
     stats.assignments.failed++;
-    logger.error(`Error finding user ${email}: ${error.message}`);
+    logger.error(`👤 Error finding user ${email}: ${error.message}`);
     return null;
   }
 }
