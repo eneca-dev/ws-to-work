@@ -1,3 +1,4 @@
+
 # Worksection to eneca.work Sync v2
 
 Упрощенное приложение для синхронизации данных между Worksection и eneca.work.

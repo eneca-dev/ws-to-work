@@ -23,12 +23,15 @@ class SyncApp {
     // Main sync endpoint
     this.app.post('/api/sync', async (req, res) => {
       try {
+        // Clear old logs before starting
+        logger.clearLogs();
         logger.info('Starting full synchronization via API');
         
         const result = await syncManager.fullSync();
         
-        // Add logs to response
-        result.logs = logger.getLogs().map(log => ({
+        // Add only current session logs to response (limit to last 200 for safety)
+        const currentLogs = logger.getLogs();
+        result.logs = currentLogs.slice(-200).map(log => ({
           timestamp: log.timestamp,
           level: log.level,
           message: log.message
@@ -42,7 +45,7 @@ class SyncApp {
         res.status(500).json({
           success: false,
           error: error.message,
-          logs: logger.getLogs()
+          logs: logger.getLogs().slice(-100) // Limit error logs too
         });
       }
     });
