@@ -214,11 +214,11 @@ class SupabaseService {
     }
   }
   
-  // Users
+  // Users (Profiles)
   async getUsers() {
     try {
       const { data, error } = await this.client
-        .from('users')
+        .from('profiles')
         .select('*');
       
       if (error) throw error;
@@ -232,7 +232,7 @@ class SupabaseService {
   async findUserByEmail(email) {
     try {
       const { data, error } = await this.client
-        .from('users')
+        .from('profiles')
         .select('*')
         .eq('email', email)
         .single();
@@ -255,7 +255,7 @@ class SupabaseService {
   async findUserByName(name) {
     try {
       const { data, error } = await this.client
-        .from('users')
+        .from('profiles')
         .select('*')
         .or(`first_name.ilike.%${name}%,last_name.ilike.%${name}%`);
       

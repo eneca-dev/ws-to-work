@@ -68,39 +68,32 @@ async function syncProjects(stats) {
 
 async function syncStages(stats) {
   try {
-    const supaProjects = await supabase.getProjectsWithExternalId();
     const existingStages = await supabase.getStages();
     
-    // Create default stages for each project
+    // Create default stages (global stages, not per project)
     const defaultStages = [
-      { name: 'Планирование', order: 1 },
-      { name: 'В работе', order: 2 },
-      { name: 'Тестирование', order: 3 },
-      { name: 'Завершено', order: 4 }
+      { name: 'Планирование', description: 'Стадия планирования проекта' },
+      { name: 'В работе', description: 'Стадия выполнения работ' },
+      { name: 'Тестирование', description: 'Стадия тестирования и проверки' },
+      { name: 'Завершено', description: 'Стадия завершения проекта' }
     ];
     
-    for (const project of supaProjects) {
-      for (const stageTemplate of defaultStages) {
-        const existing = existingStages.find(s => 
-          s.stage_project_id === project.project_id && 
-          s.stage_name === stageTemplate.name
-        );
+    for (const stageTemplate of defaultStages) {
+      const existing = existingStages.find(s => 
+        s.stage_name === stageTemplate.name
+      );
+      
+      if (!existing) {
+        const stageData = {
+          stage_name: stageTemplate.name,
+          stage_description: stageTemplate.description
+        };
         
-        if (!existing) {
-          const stageData = {
-            stage_name: stageTemplate.name,
-            stage_project_id: project.project_id,
-            stage_order: stageTemplate.order,
-            external_source: 'system',
-            external_updated_at: new Date().toISOString()
-          };
-          
-          await supabase.createStage(stageData);
-          stats.stages.created++;
-          logger.success(`Created stage: ${stageTemplate.name} for ${project.project_name}`);
-        } else {
-          stats.stages.unchanged++;
-        }
+        await supabase.createStage(stageData);
+        stats.stages.created++;
+        logger.success(`Created stage: ${stageTemplate.name}`);
+      } else {
+        stats.stages.unchanged++;
       }
     }
     
