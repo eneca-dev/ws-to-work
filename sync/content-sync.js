@@ -159,40 +159,62 @@ async function syncSections(stats) {
           );
           
           if (existing) {
-            // Update existing section
-            const updateData = {
-              section_name: wsSubtask.name,
-              section_description: wsSubtask.text || null,
-              section_start_date: wsSubtask.date_start || null,
-              section_end_date: wsSubtask.date_end || null,
-              external_updated_at: new Date().toISOString()
-            };
-            
-            // Find and assign responsible using enhanced search
+            // Check if section actually needs updating
             const responsible = await findUserByEmail(wsSubtask.user_to?.email, stats);
-            if (responsible) {
-              updateData.section_responsible = responsible.user_id;
-              logger.info(`👤 Assigned responsible to section "${wsSubtask.name}": ${responsible.first_name} ${responsible.last_name}`);
+            
+            const hasChanges = 
+              existing.section_name !== wsSubtask.name ||
+              existing.section_description !== (wsSubtask.text || null) ||
+              existing.section_start_date !== (wsSubtask.date_start || null) ||
+              existing.section_end_date !== (wsSubtask.date_end || null) ||
+              (responsible && existing.section_responsible !== responsible.user_id) ||
+              (!responsible && existing.section_responsible !== null);
+            
+            if (hasChanges) {
+              // Update existing section only if there are changes
+              const updateData = {
+                section_name: wsSubtask.name,
+                section_description: wsSubtask.text || null,
+                section_start_date: wsSubtask.date_start || null,
+                section_end_date: wsSubtask.date_end || null,
+                external_updated_at: new Date().toISOString()
+              };
+              
+              if (responsible) {
+                updateData.section_responsible = responsible.user_id;
+                logger.info(`👤 Assigned responsible to section "${wsSubtask.name}": ${responsible.first_name} ${responsible.last_name}`);
+              } else if (existing.section_responsible !== null) {
+                updateData.section_responsible = null;
+                logger.info(`👤 Removed responsible from section "${wsSubtask.name}"`);
+              }
+              
+              await supabase.updateSection(existing.section_id, updateData);
+              stats.sections.updated++;
+              
+              // Добавляем в отчет
+              if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+              stats.detailed_report.actions.push({
+                action: 'updated',
+                type: 'section',
+                id: wsSubtask.id,
+                name: wsSubtask.name,
+                object: object.object_name,
+                project: project.project_name,
+                timestamp: new Date().toISOString(),
+                responsible_assigned: !!responsible,
+                responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null,
+                dates: {
+                  start: wsSubtask.date_start || null,
+                  end: wsSubtask.date_end || null
+                }
+              });
+              
+              logger.success(`Updated section: ${wsSubtask.name}${wsSubtask.date_start ? ` (start: ${wsSubtask.date_start})` : ''}${wsSubtask.date_end ? ` (end: ${wsSubtask.date_end})` : ''}`);
+            } else {
+              // No changes needed
+              stats.sections.unchanged++;
+              logger.info(`✅ Section unchanged: ${wsSubtask.name}`);
             }
-            
-            await supabase.updateSection(existing.section_id, updateData);
-            stats.sections.updated++;
-            
-            // Добавляем в отчет
-            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-            stats.detailed_report.actions.push({
-              action: 'updated',
-              type: 'section',
-              id: wsSubtask.id,
-              name: wsSubtask.name,
-              object: object.object_name,
-              project: project.project_name,
-              timestamp: new Date().toISOString(),
-              responsible_assigned: !!responsible,
-              responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null
-            });
-            
-            logger.success(`Updated section: ${wsSubtask.name}`);
             
           } else {
             // Create new section
@@ -229,10 +251,14 @@ async function syncSections(stats) {
               project: project.project_name,
               timestamp: new Date().toISOString(),
               responsible_assigned: !!responsible,
-              responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null
+              responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null,
+              dates: {
+                start: wsSubtask.date_start || null,
+                end: wsSubtask.date_end || null
+              }
             });
             
-            logger.success(`Created section: ${wsSubtask.name}`);
+            logger.success(`Created section: ${wsSubtask.name}${wsSubtask.date_start ? ` (start: ${wsSubtask.date_start})` : ''}${wsSubtask.date_end ? ` (end: ${wsSubtask.date_end})` : ''}`);
           }
         }
       }
