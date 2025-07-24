@@ -219,7 +219,7 @@ async function syncSections(stats) {
                 section_name: wsSubtask.name,
                 section_description: wsSubtask.text || null,
                 section_object_id: object.object_id,
-                section_project_id: object.object_project_id,
+                section_project_id: project.project_id,  // ИСПРАВЛЕНО: используем project_id из контекста
                 section_start_date: wsSubtask.date_start || null,
                 section_end_date: wsSubtask.date_end || null,
                 external_updated_at: new Date().toISOString()
@@ -267,7 +267,7 @@ async function syncSections(stats) {
               section_name: wsSubtask.name,
               section_description: wsSubtask.text || null,
               section_object_id: object.object_id,
-              section_project_id: object.object_project_id,
+              section_project_id: project.project_id,  // ИСПРАВЛЕНО: используем project_id из контекста
               section_start_date: wsSubtask.date_start || null,
               section_end_date: wsSubtask.date_end || null,
               external_id: wsSubtask.id.toString(),

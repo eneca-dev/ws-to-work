@@ -34,10 +34,12 @@ async function syncProjects(stats) {
           };
           
           // Find and assign manager using enhanced search
-          const manager = await findUserByEmail(wsProject.user_from?.email, stats);
+          // Приоритет: manager -> user_to -> user_from
+          const managerEmail = wsProject.manager || wsProject.user_to?.email || wsProject.user_from?.email;
+          const manager = await findUserByEmail(managerEmail, stats);
           if (manager) {
             updateData.project_manager = manager.user_id;
-            logger.info(`👤 Assigned manager to project "${wsProject.name}": ${manager.first_name} ${manager.last_name}`);
+            logger.info(`👤 Assigned manager to project "${wsProject.name}": ${manager.first_name} ${manager.last_name} (source: ${wsProject.manager ? 'manager' : wsProject.user_to?.email ? 'user_to' : 'user_from'})`);
           }
           
           await supabase.updateProject(existing.project_id, updateData);
@@ -68,10 +70,12 @@ async function syncProjects(stats) {
           };
           
           // Find and assign manager using enhanced search
-          const manager = await findUserByEmail(wsProject.user_from?.email, stats);
+          // Приоритет: manager -> user_to -> user_from
+          const managerEmail = wsProject.manager || wsProject.user_to?.email || wsProject.user_from?.email;
+          const manager = await findUserByEmail(managerEmail, stats);
           if (manager) {
             projectData.project_manager = manager.user_id;
-            logger.info(`👤 Assigned manager to new project "${wsProject.name}": ${manager.first_name} ${manager.last_name}`);
+            logger.info(`👤 Assigned manager to new project "${wsProject.name}": ${manager.first_name} ${manager.last_name} (source: ${wsProject.manager ? 'manager' : wsProject.user_to?.email ? 'user_to' : 'user_from'})`);
           }
           
           await supabase.createProject(projectData);
