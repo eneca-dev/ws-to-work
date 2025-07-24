@@ -60,13 +60,54 @@ async function syncObjects(stats) {
           continue;
         }
         
-        // Проверяем существующий объект
+        // Проверяем существующий объект В ПРАВИЛЬНОЙ СТАДИИ
         const existingObject = existingObjects.find(obj => 
-          obj.external_id === taskGroup.id.toString() && obj.external_source === 'worksection'
+          obj.external_id === taskGroup.id.toString() && 
+          obj.external_source === 'worksection' &&
+          obj.object_stage_id === projectStage.stage_id  // Объект должен быть в правильной стадии!
+        );
+        
+        // Проверяем есть ли объект в других стадиях (неправильных)
+        const objectInWrongStage = existingObjects.find(obj => 
+          obj.external_id === taskGroup.id.toString() && 
+          obj.external_source === 'worksection' &&
+          obj.object_stage_id !== projectStage.stage_id  // Объект в неправильной стадии
         );
         
         if (existingObject) {
-          logger.info(`Object already exists: ${taskGroup.name}`);
+          logger.info(`✅ Object already exists in correct stage: ${taskGroup.name}`);
+          continue;
+        }
+        
+        if (objectInWrongStage) {
+          // Перемещаем объект в правильную стадию
+          logger.info(`🔄 Moving object to correct stage: ${taskGroup.name}`);
+          
+          const updateData = {
+            object_stage_id: projectStage.stage_id,
+            object_name: taskGroup.name,  // Обновляем название на всякий случай
+            object_description: taskGroup.text || '',
+            external_updated_at: new Date().toISOString()
+          };
+          
+          try {
+            await supabase.updateObject(objectInWrongStage.object_id, updateData);
+            logger.success(`✅ Moved object: ${taskGroup.name} to stage ${projectStage.stage_name}`);
+            stats.objects.updated++;
+            
+            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            stats.detailed_report.actions.push({
+              type: 'object',
+              action: 'moved',
+              name: taskGroup.name,
+              stage: projectStage.stage_name,
+              project: project.project_name,
+              external_id: taskGroup.id.toString()
+            });
+          } catch (error) {
+            logger.error(`Failed to move object ${taskGroup.name}: ${error.message}`);
+            stats.objects.errors++;
+          }
           continue;
         }
         
@@ -98,6 +139,7 @@ async function syncObjects(stats) {
           }
         } catch (error) {
           logger.error(`Failed to create object ${taskGroup.name}: ${error.message}`);
+          stats.objects.errors++;
         }
       }
     }
