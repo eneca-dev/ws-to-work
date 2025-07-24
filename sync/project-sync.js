@@ -120,11 +120,8 @@ async function syncStages(stats) {
     const supaProjects = await supabase.getProjectsWithExternalId();
     const existingStages = await supabase.getStages();
     
-    // Собираем все уникальные стадии из меток всех проектов
-    const stageTagsMap = new Map(); // id -> name
-    
     for (const project of supaProjects) {
-      logger.info(`🎯 Analyzing stages for project: ${project.project_name}`);
+      logger.info(`🎯 Syncing stages for project: ${project.project_name}`);
       
       // Получаем данные проекта из Worksection
       const wsProjects = await worksection.getProjectsWithTag();
@@ -132,97 +129,58 @@ async function syncStages(stats) {
         p.id && p.id.toString() === project.external_id.toString()
       );
       
-      if (wsProject && wsProject.tags) {
-        // Ищем метки стадий в проекте
-        Object.entries(wsProject.tags).forEach(([tagId, tagName]) => {
-          if (tagName && tagName.includes('Стадия')) {
-            stageTagsMap.set(tagId, tagName);
-            logger.info(`Found stage tag for project ${project.project_name}: ${tagName}`);
-          }
-        });
+      if (!wsProject) {
+        logger.warn(`Project not found in Worksection: ${project.project_name}`);
+        continue;
       }
-    }
-    
-    logger.info(`Found ${stageTagsMap.size} unique stage tags`);
-    
-    // Создаем или обновляем стадии
-    for (const [tagId, stageName] of stageTagsMap) {
-      try {
-        // Пропускаем стадии начинающиеся с "!"
-        if (stageName.startsWith('!')) {
-          logger.info(`🚫 Skipping stage starting with "!": ${stageName}`);
-          stats.stages.skipped = (stats.stages.skipped || 0) + 1;
-          continue;
-        }
-        
-        // Ищем существующую стадию по external_id (tag ID)
-        const existing = existingStages.find(s => 
-          s.external_id && s.external_id.toString() === tagId.toString()
-        );
-        
-        if (existing) {
-          // Обновляем существующую стадию
-          const updateData = {
-            stage_name: stageName,
-            stage_description: `Стадия проекта: ${stageName}`,
-            external_updated_at: new Date().toISOString()
+      
+      if (!wsProject.tags) {
+        logger.info(`No tags found for project: ${project.project_name}`);
+        continue;
+      }
+      
+      // Ищем метки стадий в проекте
+      for (const [tagId, tagName] of Object.entries(wsProject.tags)) {
+        if (tagName && tagName.includes('Стадия')) {
+          logger.info(`🏷️ Found stage tag: ${tagName} (${tagId}) for project ${project.project_name}`);
+          
+          // Проверяем, есть ли уже такая стадия ДЛЯ ЭТОГО ПРОЕКТА
+          const existingStage = existingStages.find(stage => 
+            stage.stage_project_id === project.project_id && 
+            stage.external_id === tagId
+          );
+          
+          if (existingStage) {
+            logger.info(`Stage already exists: ${tagName} for project ${project.project_name}`);
+            continue;
+          }
+          
+          // Создаем новую стадию ДЛЯ ЭТОГО ПРОЕКТА
+          const newStage = {
+            stage_name: tagName,
+            stage_project_id: project.project_id, // Привязываем к проекту!
+            external_id: tagId,
+            external_source: 'worksection'
           };
           
-          await supabase.updateStage(existing.stage_id, updateData);
-          stats.stages.updated++;
+          const createdStage = await supabase.createStage(newStage);
           
-          // Добавляем в отчет
-          if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-          stats.detailed_report.actions.push({
-            action: 'updated',
-            type: 'stage',
-            id: tagId,
-            name: stageName,
-            timestamp: new Date().toISOString()
-          });
-          
-          logger.success(`Updated stage: ${stageName}`);
-          
-        } else {
-          // Создаем новую стадию
-          const stageData = {
-            stage_name: stageName,
-            stage_description: `Стадия проекта: ${stageName}`,
-            external_id: tagId.toString(),
-            external_source: 'worksection',
-            external_updated_at: new Date().toISOString()
-          };
-          
-          await supabase.createStage(stageData);
-          stats.stages.created++;
-          
-          // Добавляем в отчет
-          if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-          stats.detailed_report.actions.push({
-            action: 'created',
-            type: 'stage',
-            id: tagId,
-            name: stageName,
-            timestamp: new Date().toISOString()
-          });
-          
-          logger.success(`Created stage: ${stageName}`);
+          if (createdStage) {
+            logger.success(`✅ Created stage: ${tagName} for project ${project.project_name}`);
+            stats.stages.created++;
+            
+            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            stats.detailed_report.actions.push({
+              type: 'stage',
+              action: 'created',
+              name: tagName,
+              project: project.project_name,
+              external_id: tagId
+            });
+          } else {
+            logger.error(`Failed to create stage: ${tagName} for project ${project.project_name}`);
+          }
         }
-        
-      } catch (error) {
-        logger.error(`Error syncing stage ${stageName}: ${error.message}`);
-        stats.stages.errors++;
-        
-        // Добавляем ошибку в отчет
-        if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-        stats.detailed_report.actions.push({
-          action: 'error',
-          type: 'stage',
-          id: tagId,
-          name: stageName,
-          timestamp: new Date().toISOString(),
-          error: error.message
-        });
       }
     }
     
