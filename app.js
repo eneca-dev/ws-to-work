@@ -14,8 +14,15 @@ class SyncApp {
   }
   
   setupMiddleware() {
-    this.app.use(cors());
-    this.app.use(express.json());
+    // Более явные CORS настройки для диагностики
+    this.app.use(cors({
+      origin: true, // Разрешить любой origin
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+    }));
+    
+    this.app.use(express.json({ limit: '10mb' })); // Увеличиваем лимит JSON
     this.app.use(express.static(path.join(__dirname, 'public')));
   }
   
@@ -29,15 +36,20 @@ class SyncApp {
         
         const result = await syncManager.fullSync();
         
-        // Add only current session logs to response (limit to last 200 for safety)
+        // Add only current session logs to response (limit to last 50 for performance)
         const currentLogs = logger.getLogs();
-        result.logs = currentLogs.slice(-200).map(log => ({
+        result.logs = currentLogs.slice(-50).map(log => ({
           timestamp: log.timestamp,
           level: log.level,
           message: log.message
         }));
         
         logger.info('Full synchronization completed via API');
+        
+        // Логируем размер ответа для диагностики
+        const responseSize = JSON.stringify(result).length;
+        logger.info(`Response size: ${responseSize} bytes (${(responseSize/1024).toFixed(1)} KB)`);
+        
         res.json(result);
         
       } catch (error) {
@@ -45,7 +57,7 @@ class SyncApp {
         res.status(500).json({
           success: false,
           error: error.message,
-          logs: logger.getLogs().slice(-100) // Limit error logs too
+          logs: logger.getLogs().slice(-30) // Limit error logs for performance
         });
       }
     });

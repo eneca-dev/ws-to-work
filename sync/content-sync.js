@@ -7,17 +7,24 @@ async function syncObjects(stats) {
     const supaProjects = await supabase.getProjectsWithExternalId();
     const existingObjects = await supabase.getObjects();
     
+    // ⚡ ОПТИМИЗАЦИЯ: получаем wsProjects ОДИН раз для всех проектов
+    const wsProjects = await worksection.getProjectsWithSyncTags();
+    
     for (const project of supaProjects) {
       logger.info(`📦 Syncing objects for project: ${project.project_name}`);
       
       // Читаем стадии заново для каждого проекта (они могли быть созданы в syncStages)
       const existingStages = await supabase.getStages();
       
-      // Получаем данные проекта из Worksection для определения стадии
-      const wsProjects = await worksection.getProjectsWithSyncTags();
+      // Находим данные проекта из уже полученного списка
       const wsProject = wsProjects.find(p => 
         p.id && p.id.toString() === project.external_id.toString()
       );
+      
+      if (!wsProject) {
+        logger.warning(`Project not found in Worksection: ${project.project_name}`);
+        continue;
+      }
       
       // Определяем тип синхронизации проекта
       const syncType = worksection.determineProjectSyncType(wsProject);
@@ -218,11 +225,13 @@ async function syncSections(stats) {
     const existingObjects = await supabase.getObjects();
     const existingSections = await supabase.getSections();
     
+    // ⚡ ОПТИМИЗАЦИЯ: получаем wsProjects ОДИН раз для всех проектов
+    const wsProjects = await worksection.getProjectsWithSyncTags();
+    
     for (const project of supaProjects) {
       logger.info(`📑 Syncing sections for project: ${project.project_name}`);
       
-      // Получаем данные проекта из Worksection для определения типа синхронизации
-      const wsProjects = await worksection.getProjectsWithSyncTags();
+      // Находим данные проекта из уже полученного списка
       const wsProject = wsProjects.find(p => 
         p.id && p.id.toString() === project.external_id.toString()
       );
