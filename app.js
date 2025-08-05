@@ -27,9 +27,22 @@ class SyncApp {
   }
   
   setupRoutes() {
+    // OPTIONS handler for CORS preflight
+    this.app.options('/api/sync', (req, res) => {
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+      res.sendStatus(200);
+    });
+    
     // Main sync endpoint
     this.app.post('/api/sync', async (req, res) => {
       try {
+        // Принудительно добавляем CORS заголовки
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+        
         // Clear old logs before starting
         logger.clearLogs();
         logger.info('Starting full synchronization via API');
