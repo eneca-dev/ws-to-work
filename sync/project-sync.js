@@ -4,7 +4,7 @@ const logger = require('../utils/logger');
 
 async function syncProjects(stats) {
   try {
-    const wsProjects = await worksection.getProjectsWithTag();
+    const wsProjects = await worksection.getProjectsWithSyncTags();
     const supaProjects = await supabase.getProjects();
     
     // Фильтруем проекты начинающиеся с "!"
@@ -21,6 +21,10 @@ async function syncProjects(stats) {
     
     for (const wsProject of filteredProjects) {
       try {
+        // Определяем тип синхронизации проекта
+        const syncType = worksection.determineProjectSyncType(wsProject);
+        logger.info(`📋 Processing project "${wsProject.name}" (sync type: ${syncType})`);
+        
         const existing = supaProjects.find(p => 
           p.external_id && p.external_id.toString() === wsProject.id.toString()
         );
@@ -53,6 +57,7 @@ async function syncProjects(stats) {
             id: wsProject.id,
             name: wsProject.name,
             timestamp: new Date().toISOString(),
+            sync_type: syncType,
             manager_assigned: !!manager,
             manager_info: manager ? `${manager.first_name} ${manager.last_name} (${manager.email})` : null
           });
@@ -81,7 +86,7 @@ async function syncProjects(stats) {
           await supabase.createProject(projectData);
           stats.projects.created++;
           
-          // Добавляем детальную информацию в отчет
+                    // Добавляем детальную информацию в отчет  
           if (!stats.detailed_report) stats.detailed_report = { actions: [] };
           stats.detailed_report.actions.push({
             action: 'created',
@@ -89,6 +94,7 @@ async function syncProjects(stats) {
             id: wsProject.id,
             name: wsProject.name,
             timestamp: new Date().toISOString(),
+            sync_type: syncType,
             manager_assigned: !!manager,
             manager_info: manager ? `${manager.first_name} ${manager.last_name} (${manager.email})` : null
           });

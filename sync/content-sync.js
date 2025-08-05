@@ -14,10 +14,14 @@ async function syncObjects(stats) {
       const existingStages = await supabase.getStages();
       
       // Получаем данные проекта из Worksection для определения стадии
-      const wsProjects = await worksection.getProjectsWithTag();
+      const wsProjects = await worksection.getProjectsWithSyncTags();
       const wsProject = wsProjects.find(p => 
         p.id && p.id.toString() === project.external_id.toString()
       );
+      
+      // Определяем тип синхронизации проекта
+      const syncType = worksection.determineProjectSyncType(wsProject);
+      logger.info(`📦 Project "${project.project_name}" sync type: ${syncType}`);
       
       // Определяем стадию проекта
       let projectStage = null;
@@ -44,15 +48,70 @@ async function syncObjects(stats) {
         continue;
       }
       
-      // Получаем задачи проекта из Worksection
-      const wsTasks = await worksection.getProjectTasks(project.external_id);
-      
-      // Фильтруем Task Groups (задачи с подзадачами) и не начинающиеся с "!"
-      const taskGroups = wsTasks.filter(task => 
-        task.child && task.child.length > 0 && !task.name.startsWith('!')
-      );
-      
-      logger.info(`Found ${taskGroups.length} task groups for project ${project.project_name}`);
+      // Логика зависит от типа синхронизации
+      if (syncType === 'os') {
+        // OS проекты: создаем объект-заглушку с именем проекта
+        logger.info(`📦 OS Project: Creating placeholder object for project ${project.project_name}`);
+        
+        const placeholderExternalId = `${project.external_id}_${projectStage.external_id}_placeholder`;
+        
+        // Проверяем существующий объект-заглушку
+        const existingPlaceholder = existingObjects.find(obj => 
+          obj.external_id === placeholderExternalId && 
+          obj.external_source === 'worksection-os' &&
+          obj.object_stage_id === projectStage.stage_id
+        );
+        
+        if (!existingPlaceholder) {
+          // Создаем объект-заглушку
+          const placeholderObject = {
+            object_name: project.project_name,
+            object_description: `Объект-заглушка для OS проекта: ${project.project_name}`,
+            object_stage_id: projectStage.stage_id,
+            external_id: placeholderExternalId,
+            external_source: 'worksection-os'
+          };
+          
+          try {
+            const createdObject = await supabase.createObject(placeholderObject);
+            
+            if (createdObject) {
+              logger.success(`✅ Created OS placeholder object: ${project.project_name} in stage ${projectStage.stage_name}`);
+              stats.objects.created++;
+              
+              if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+              stats.detailed_report.actions.push({
+                type: 'object',
+                action: 'created',
+                name: project.project_name + ' (placeholder)',
+                stage: projectStage.stage_name,
+                project: project.project_name,
+                external_id: placeholderExternalId,
+                sync_type: 'os'
+              });
+            }
+          } catch (error) {
+            logger.error(`Failed to create OS placeholder object ${project.project_name}: ${error.message}`);
+            stats.objects.errors++;
+          }
+        } else {
+          logger.info(`✅ OS placeholder object already exists: ${project.project_name}`);
+          stats.objects.unchanged++;
+        }
+        
+      } else {
+        // Стандартные проекты: используем существующую логику с task groups
+        logger.info(`📦 Standard Project: Processing task groups for ${project.project_name}`);
+        
+        // Получаем задачи проекта из Worksection
+        const wsTasks = await worksection.getProjectTasks(project.external_id);
+        
+        // Фильтруем Task Groups (задачи с подзадачами) и не начинающиеся с "!"
+        const taskGroups = wsTasks.filter(task => 
+          task.child && task.child.length > 0 && !task.name.startsWith('!')
+        );
+        
+        logger.info(`Found ${taskGroups.length} task groups for project ${project.project_name}`);
       
       for (const taskGroup of taskGroups) {
         if (taskGroup.status !== 'active') {
@@ -142,6 +201,7 @@ async function syncObjects(stats) {
           stats.objects.errors++;
         }
       }
+      } // конец else блока для стандартных проектов
     }
     
     logger.success(`✅ Objects sync completed`);
@@ -161,15 +221,173 @@ async function syncSections(stats) {
     for (const project of supaProjects) {
       logger.info(`📑 Syncing sections for project: ${project.project_name}`);
       
+      // Получаем данные проекта из Worksection для определения типа синхронизации
+      const wsProjects = await worksection.getProjectsWithSyncTags();
+      const wsProject = wsProjects.find(p => 
+        p.id && p.id.toString() === project.external_id.toString()
+      );
+      
+      if (!wsProject) {
+        logger.warning(`Project not found in Worksection: ${project.project_name}`);
+        continue;
+      }
+      
+      // Определяем тип синхронизации проекта
+      const syncType = worksection.determineProjectSyncType(wsProject);
+      logger.info(`📑 Project "${project.project_name}" sync type: ${syncType}`);
+      
       // Получаем задачи проекта из Worksection
       const wsTasks = await worksection.getProjectTasks(project.external_id);
       
-      // Фильтруем Task Groups (задачи с подзадачами)
-      const taskGroups = wsTasks.filter(task => 
-        task.child && task.child.length > 0 && !task.name.startsWith('!')
-      );
-      
-      for (const taskGroup of taskGroups) {
+      // Логика зависит от типа синхронизации
+      if (syncType === 'os') {
+        // OS проекты: обрабатываем ВСЕ активные задачи как разделы (не подзадачи)
+        logger.info(`📑 OS Project: Processing all tasks as sections for ${project.project_name}`);
+        
+        // Фильтруем ВСЕ активные задачи (не только task groups), исключая начинающиеся с "!"
+        const allTasks = wsTasks.filter(task => 
+          task.status === 'active' && !task.name.startsWith('!')
+        );
+        
+        logger.info(`Found ${allTasks.length} active tasks for OS project ${project.project_name}`);
+        
+        // Находим объект-заглушку для этого проекта
+        const placeholderObject = existingObjects.find(obj => 
+          obj.external_source === 'worksection-os' &&
+          obj.external_id.includes(project.external_id + '_') &&
+          obj.external_id.includes('_placeholder')
+        );
+        
+        if (!placeholderObject) {
+          logger.warning(`OS placeholder object not found for project: ${project.project_name}`);
+          continue;
+        }
+        
+        // Обрабатываем задачи как разделы
+        for (const wsTask of allTasks) {
+          const existing = existingSections.find(s => 
+            s.external_id && s.external_id.toString() === wsTask.id.toString()
+          );
+          
+          if (existing) {
+            // Проверяем нужно ли обновление
+            const responsible = await findUserByEmail(wsTask.user_to?.email, stats);
+            
+            const hasChanges = 
+              existing.section_name !== wsTask.name ||
+              existing.section_description !== (wsTask.text || null) ||
+              existing.section_start_date !== (wsTask.date_start || null) ||
+              existing.section_end_date !== (wsTask.date_end || null) ||
+              existing.section_object_id !== placeholderObject.object_id ||
+              (responsible && existing.section_responsible !== responsible.user_id) ||
+              (!responsible && existing.section_responsible !== null);
+            
+            if (hasChanges) {
+              // Обновляем существующий раздел
+              const updateData = {
+                section_name: wsTask.name,
+                section_description: wsTask.text || null,
+                section_object_id: placeholderObject.object_id,
+                section_project_id: project.project_id,
+                section_start_date: wsTask.date_start || null,
+                section_end_date: wsTask.date_end || null,
+                external_updated_at: new Date().toISOString()
+              };
+              
+              if (responsible) {
+                updateData.section_responsible = responsible.user_id;
+                logger.info(`👤 Assigned responsible to OS section "${wsTask.name}": ${responsible.first_name} ${responsible.last_name}`);
+              } else if (existing.section_responsible !== null) {
+                updateData.section_responsible = null;
+                logger.info(`👤 Removed responsible from OS section "${wsTask.name}"`);
+              }
+              
+              await supabase.updateSection(existing.section_id, updateData);
+              stats.sections.updated++;
+              
+              // Добавляем в отчет
+              if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+              stats.detailed_report.actions.push({
+                action: 'updated',
+                type: 'section',
+                id: wsTask.id,
+                name: wsTask.name,
+                object: placeholderObject.object_name,
+                project: project.project_name,
+                timestamp: new Date().toISOString(),
+                sync_type: 'os',
+                responsible_assigned: !!responsible,
+                responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null,
+                dates: {
+                  start: wsTask.date_start || null,
+                  end: wsTask.date_end || null
+                }
+              });
+              
+              logger.success(`Updated OS section: ${wsTask.name} (object: ${placeholderObject.object_name})`);
+            } else {
+              // Изменений нет
+              stats.sections.unchanged++;
+              logger.info(`✅ OS section unchanged: ${wsTask.name}`);
+            }
+            
+          } else {
+            // Создаем новый раздел
+            const sectionData = {
+              section_name: wsTask.name,
+              section_description: wsTask.text || null,
+              section_object_id: placeholderObject.object_id,
+              section_project_id: project.project_id,
+              section_start_date: wsTask.date_start || null,
+              section_end_date: wsTask.date_end || null,
+              external_id: wsTask.id.toString(),
+              external_source: 'worksection-os',
+              external_updated_at: new Date().toISOString()
+            };
+            
+            // Find and assign responsible using enhanced search
+            const responsible = await findUserByEmail(wsTask.user_to?.email, stats);
+            if (responsible) {
+              sectionData.section_responsible = responsible.user_id;
+              logger.info(`👤 Assigned responsible to new OS section "${wsTask.name}": ${responsible.first_name} ${responsible.last_name}`);
+            }
+            
+            await supabase.createSection(sectionData);
+            stats.sections.created++;
+            
+            // Добавляем в отчет
+            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            stats.detailed_report.actions.push({
+              action: 'created',
+              type: 'section',
+              id: wsTask.id,
+              name: wsTask.name,
+              object: placeholderObject.object_name,
+              project: project.project_name,
+              timestamp: new Date().toISOString(),
+              sync_type: 'os',
+              responsible_assigned: !!responsible,
+              responsible_info: responsible ? `${responsible.first_name} ${responsible.last_name} (${responsible.email})` : null,
+              dates: {
+                start: wsTask.date_start || null,
+                end: wsTask.date_end || null
+              }
+            });
+            
+            logger.success(`Created OS section: ${wsTask.name} (object: ${placeholderObject.object_name})`);
+          }
+        }
+        
+      } else {
+        // Стандартные проекты: используем существующую логику с task groups и подзадачами
+        logger.info(`📑 Standard Project: Processing task groups and subtasks for ${project.project_name}`);
+        
+        // Фильтруем Task Groups (задачи с подзадачами)
+        const taskGroups = wsTasks.filter(task => 
+          task.child && task.child.length > 0 && !task.name.startsWith('!')
+        );
+        
+        for (const taskGroup of taskGroups) {
         if (taskGroup.status !== 'active') continue;
         
         // Находим соответствующий объект в БД
@@ -307,6 +525,7 @@ async function syncSections(stats) {
           }
         }
       }
+      } // конец else блока для стандартных проектов
     }
     
     logger.success(`✅ Sections sync completed`);

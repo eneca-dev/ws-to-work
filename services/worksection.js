@@ -100,6 +100,73 @@ class WorksectionService {
       return false;
     });
   }
+
+  // Получить все проекты с любой меткой синхронизации
+  async getProjectsWithSyncTags() {
+    const projects = await this.getProjects();
+    return projects.filter(project => {
+      if (!project.tags) return false;
+      
+      const hasSyncTag = (tagValue) => {
+        return tagValue && (
+          tagValue.toString().includes('eneca.work sync OS') ||
+          tagValue.toString().includes('eneca.work sync')
+        );
+      };
+      
+      // Если tags - массив
+      if (Array.isArray(project.tags)) {
+        return project.tags.some(hasSyncTag);
+      }
+      
+      // Если tags - строка
+      if (typeof project.tags === 'string') {
+        return hasSyncTag(project.tags);
+      }
+      
+      // Если tags - объект, проверяем его свойства
+      if (typeof project.tags === 'object') {
+        return Object.values(project.tags).some(hasSyncTag);
+      }
+      
+      return false;
+    });
+  }
+
+  // Определить тип синхронизации проекта
+  determineProjectSyncType(project) {
+    if (!project.tags) return null;
+    
+    const hasOSTag = (tagValue) => {
+      return tagValue && tagValue.toString().includes('eneca.work sync OS');
+    };
+    
+    const hasStandardTag = (tagValue) => {
+      return tagValue && tagValue.toString().includes('eneca.work sync') && 
+             !tagValue.toString().includes('eneca.work sync OS');
+    };
+    
+    // Если tags - массив
+    if (Array.isArray(project.tags)) {
+      if (project.tags.some(hasOSTag)) return 'os';
+      if (project.tags.some(hasStandardTag)) return 'standard';
+    }
+    
+    // Если tags - строка
+    if (typeof project.tags === 'string') {
+      if (hasOSTag(project.tags)) return 'os';
+      if (hasStandardTag(project.tags)) return 'standard';
+    }
+    
+    // Если tags - объект, проверяем его свойства
+    if (typeof project.tags === 'object') {
+      const tagValues = Object.values(project.tags);
+      if (tagValues.some(hasOSTag)) return 'os';
+      if (tagValues.some(hasStandardTag)) return 'standard';
+    }
+    
+    return null;
+  }
   
   async getProjectTags() {
     const data = await this.request('get_tags');
