@@ -38,24 +38,27 @@ class SyncApp {
     // Main sync endpoint
     this.app.post('/api/sync', async (req, res) => {
       try {
-        // Принудительно добавляем CORS заголовки
-        res.header('Access-Control-Allow-Origin', '*');
-        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-        
         // Clear old logs before starting
         logger.clearLogs();
         logger.info('Starting full synchronization via API');
         
         const result = await syncManager.fullSync();
         
-        // Add only current session logs to response (limit to last 50 for performance)
-        const currentLogs = logger.getLogs();
-        result.logs = currentLogs.slice(-50).map(log => ({
-          timestamp: log.timestamp,
-          level: log.level,
-          message: log.message
-        }));
+        // ВРЕМЕННО убираем логи из ответа для диагностики размера
+        // const currentLogs = logger.getLogs();
+        // result.logs = currentLogs.slice(-50).map(log => ({
+        //   timestamp: log.timestamp,
+        //   level: log.level,
+        //   message: log.message
+        // }));
+        result.logs = ["Logs temporarily disabled for size optimization"];
+        
+        // ВРЕМЕННО убираем детальный отчет для уменьшения размера
+        if (result.detailed_report && result.detailed_report.all_actions) {
+          const originalCount = result.detailed_report.all_actions.length;
+          result.detailed_report.all_actions = result.detailed_report.all_actions.slice(-10); // Только последние 10
+          result.detailed_report.size_note = `Showing last 10 of ${originalCount} actions`;
+        }
         
         logger.info('Full synchronization completed via API');
         
@@ -63,14 +66,25 @@ class SyncApp {
         const responseSize = JSON.stringify(result).length;
         logger.info(`Response size: ${responseSize} bytes (${(responseSize/1024).toFixed(1)} KB)`);
         
+        // Убеждаемся что CORS заголовки установлены ПЕРЕД отправкой
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+        
         res.json(result);
         
       } catch (error) {
         logger.error(`Full sync API error: ${error.message}`);
+        
+        // Добавляем CORS заголовки и для ошибок
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+        
         res.status(500).json({
           success: false,
           error: error.message,
-          logs: logger.getLogs().slice(-30) // Limit error logs for performance
+          logs: ["Error logs temporarily disabled"] // Убираем логи и из ошибок
         });
       }
     });
