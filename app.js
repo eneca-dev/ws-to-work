@@ -48,6 +48,13 @@ class SyncApp {
         
         const result = await syncManager.fullSync(offset, limit);
         
+        // Добавляем информацию о пагинации для фронтенда
+        result.pagination = {
+          offset: offset,
+          limit: limit,
+          hasMore: result.projects && result.projects.total > (offset + limit)
+        };
+        
         // ВРЕМЕННО убираем логи из ответа для диагностики размера
         // const currentLogs = logger.getLogs();
         // result.logs = currentLogs.slice(-50).map(log => ({
