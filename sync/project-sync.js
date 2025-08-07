@@ -2,7 +2,7 @@ const worksection = require('../services/worksection');
 const supabase = require('../services/supabase');
 const logger = require('../utils/logger');
 
-async function syncProjects(stats) {
+async function syncProjects(stats, offset = 0, limit = 3) {
   try {
     const wsProjects = await worksection.getProjectsWithSyncTags();
     const supaProjects = await supabase.getProjects();
@@ -19,7 +19,11 @@ async function syncProjects(stats) {
     
     logger.info(`Found ${wsProjects.length} projects with sync tag (${filteredProjects.length} after filtering)`);
     
-    for (const wsProject of filteredProjects) {
+    // Применяем offset и limit для пагинации
+    const paginatedProjects = filteredProjects.slice(offset, offset + limit);
+    logger.warning(`⚠️ Processing projects ${offset + 1}-${offset + paginatedProjects.length} of ${filteredProjects.length} total`);
+    
+    for (const wsProject of paginatedProjects) {
       try {
         // Определяем тип синхронизации проекта
         const syncType = worksection.determineProjectSyncType(wsProject);

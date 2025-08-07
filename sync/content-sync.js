@@ -2,7 +2,7 @@ const worksection = require('../services/worksection');
 const supabase = require('../services/supabase');
 const logger = require('../utils/logger');
 
-async function syncObjects(stats) {
+async function syncObjects(stats, offset = 0, limit = 3) {
   try {
     const supaProjects = await supabase.getProjectsWithExternalId();
     const existingObjects = await supabase.getObjects();
@@ -10,7 +10,11 @@ async function syncObjects(stats) {
     // ⚡ ОПТИМИЗАЦИЯ: получаем wsProjects ОДИН раз для всех проектов
     const wsProjects = await worksection.getProjectsWithSyncTags();
     
-    for (const project of supaProjects) {
+    // Применяем offset и limit для пагинации
+    const paginatedProjects = supaProjects.slice(offset, offset + limit);
+    logger.warning(`⚠️ Objects: Processing projects ${offset + 1}-${offset + paginatedProjects.length} of ${supaProjects.length} total`);
+    
+    for (const project of paginatedProjects) {
       logger.info(`📦 Syncing objects for project: ${project.project_name}`);
       
       // Читаем стадии заново для каждого проекта (они могли быть созданы в syncStages)
@@ -219,7 +223,7 @@ async function syncObjects(stats) {
   }
 }
 
-async function syncSections(stats) {
+async function syncSections(stats, offset = 0, limit = 3) {
   try {
     const supaProjects = await supabase.getProjectsWithExternalId();
     const existingObjects = await supabase.getObjects();
@@ -228,7 +232,11 @@ async function syncSections(stats) {
     // ⚡ ОПТИМИЗАЦИЯ: получаем wsProjects ОДИН раз для всех проектов
     const wsProjects = await worksection.getProjectsWithSyncTags();
     
-    for (const project of supaProjects) {
+    // Применяем offset и limit для пагинации
+    const paginatedProjects = supaProjects.slice(offset, offset + limit);
+    logger.warning(`⚠️ Sections: Processing projects ${offset + 1}-${offset + paginatedProjects.length} of ${supaProjects.length} total`);
+    
+    for (const project of paginatedProjects) {
       logger.info(`📑 Syncing sections for project: ${project.project_name}`);
       
       // Находим данные проекта из уже полученного списка

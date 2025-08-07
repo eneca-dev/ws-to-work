@@ -38,11 +38,15 @@ class SyncApp {
     // Main sync endpoint
     this.app.post('/api/sync', async (req, res) => {
       try {
+        // Получаем offset из query параметра (по умолчанию 0)
+        const offset = parseInt(req.query.offset || '0');
+        const limit = parseInt(req.query.limit || '3');
+        
         // Clear old logs before starting
         logger.clearLogs();
-        logger.info('Starting full synchronization via API');
+        logger.info(`Starting sync with offset: ${offset}, limit: ${limit}`);
         
-        const result = await syncManager.fullSync();
+        const result = await syncManager.fullSync(offset, limit);
         
         // ВРЕМЕННО убираем логи из ответа для диагностики размера
         // const currentLogs = logger.getLogs();

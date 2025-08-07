@@ -26,9 +26,9 @@ class SyncManager {
     };
   }
   
-  async fullSync() {
+  async fullSync(offset = 0, limit = 3) {
     const startTime = Date.now();
-    logger.info('🚀 Starting full synchronization');
+    logger.info(`🚀 Starting sync with offset: ${offset}, limit: ${limit}`);
     
     try {
       // Clear previous stats
@@ -36,34 +36,19 @@ class SyncManager {
       
       // Step 1: Sync projects
       logger.info('📋 Step 1/4: Syncing projects');
-      await syncProjects(this.stats);
+      await syncProjects(this.stats, offset, limit);
       
       // Step 2: Sync stages
       logger.info('🎯 Step 2/4: Syncing stages');
       await syncStages(this.stats);
       
-      // Проверяем время - если прошло больше 25 секунд, пропускаем тяжелые операции
-      const elapsed = Date.now() - startTime;
-      if (elapsed > 25000) {
-        logger.warning('⏰ Time limit approaching, skipping objects and sections sync');
-        logger.info('📦 Objects sync: SKIPPED due to timeout risk');
-        logger.info('📑 Sections sync: SKIPPED due to timeout risk');
-      } else {
-        // Step 3: Sync objects
-        logger.info('📦 Step 3/4: Syncing objects');
-        await syncObjects(this.stats);
-        
-        // Проверяем время снова перед sections
-        const elapsed2 = Date.now() - startTime;
-        if (elapsed2 < 28000) {
-          // Step 4: Sync sections
-          logger.info('📑 Step 4/4: Syncing sections');
-          await syncSections(this.stats);
-        } else {
-          logger.warning('⏰ Time limit approaching, skipping sections sync');
-          logger.info('📑 Sections sync: SKIPPED due to timeout risk');
-        }
-      }
+      // Step 3: Sync objects
+      logger.info('📦 Step 3/4: Syncing objects');
+      await syncObjects(this.stats, offset, limit);
+      
+      // Step 4: Sync sections
+      logger.info('📑 Step 4/4: Syncing sections');
+      await syncSections(this.stats, offset, limit);
       
       const duration = Date.now() - startTime;
       logger.success(`✅ Full synchronization completed in ${duration}ms`);
