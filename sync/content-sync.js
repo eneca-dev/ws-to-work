@@ -51,7 +51,7 @@ async function syncObjects(stats) {
       }
       
       if (!projectStage) {
-        logger.warn(`No stage found for project: ${project.project_name}. Skipping objects.`);
+        logger.warning(`No stage found for project: ${project.project_name}. Skipping objects.`);
         continue;
       }
       

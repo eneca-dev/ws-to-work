@@ -140,7 +140,7 @@ async function syncStages(stats) {
       );
       
       if (!wsProject) {
-        logger.warn(`Project not found in Worksection: ${project.project_name}`);
+        logger.warning(`Project not found in Worksection: ${project.project_name}`);
         continue;
       }
       
