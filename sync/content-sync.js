@@ -84,7 +84,16 @@ async function syncObjects(stats, offset = 0, limit = 3) {
           };
           
           try {
-            const createdObject = await supabase.createObject(placeholderObject);
+            const createdObject = await supabase.upsertObjectByKey(
+              project.project_id,
+              projectStage.stage_id,
+              'worksection-os',
+              placeholderExternalId,
+              {
+                object_name: project.project_name,
+                object_description: `Объект-заглушка для OS проекта: ${project.project_name}`
+              }
+            );
             
             if (createdObject) {
               logger.success(`✅ Created OS placeholder object: ${project.project_name} in stage ${projectStage.stage_name}`);
@@ -182,16 +191,19 @@ async function syncObjects(stats, offset = 0, limit = 3) {
         }
         
         // Создаем новый объект и привязываем к найденной стадии проекта
-        const newObject = {
+        const newObjectData = {
           object_name: taskGroup.name,
-          object_description: taskGroup.text || '',
-          object_stage_id: projectStage.stage_id, // Привязываем к стадии проекта!
-          external_id: taskGroup.id.toString(),
-          external_source: 'worksection'
+          object_description: taskGroup.text || ''
         };
         
         try {
-          const createdObject = await supabase.createObject(newObject);
+          const createdObject = await supabase.upsertObjectByKey(
+            project.project_id,
+            projectStage.stage_id,
+            'worksection',
+            taskGroup.id.toString(),
+            newObjectData
+          );
           
           if (createdObject) {
             logger.success(`✅ Created object: ${taskGroup.name} in stage ${projectStage.stage_name}`);
@@ -282,7 +294,10 @@ async function syncSections(stats, offset = 0, limit = 3) {
         
         // Обрабатываем задачи как разделы
         for (const wsTask of allTasks) {
-          const existing = existingSections.find(s => 
+          // Ищем существующий раздел по ключу (проект + источник + внешний id)
+          const existing = existingSections.find(s =>
+            s.section_project_id === project.project_id &&
+            s.external_source === 'worksection-os' &&
             s.external_id && s.external_id.toString() === wsTask.id.toString()
           );
           
@@ -349,16 +364,13 @@ async function syncSections(stats, offset = 0, limit = 3) {
             }
             
           } else {
-            // Создаем новый раздел
+            // Готовим данные для upsert (без ключевых полей)
             const sectionData = {
               section_name: wsTask.name,
               section_description: wsTask.text || null,
               section_object_id: placeholderObject.object_id,
-              section_project_id: project.project_id,
               section_start_date: wsTask.date_start || null,
               section_end_date: wsTask.date_end || null,
-              external_id: wsTask.id.toString(),
-              external_source: 'worksection-os',
               external_updated_at: new Date().toISOString()
             };
             
@@ -369,7 +381,13 @@ async function syncSections(stats, offset = 0, limit = 3) {
               logger.info(`👤 Assigned responsible to new OS section "${wsTask.name}": ${responsible.first_name} ${responsible.last_name}`);
             }
             
-            await supabase.createSection(sectionData);
+            // Идемпотентный upsert с учетом нового триггера
+            await supabase.upsertSectionByKey(
+              project.project_id,
+              'worksection-os',
+              wsTask.id.toString(),
+              sectionData
+            );
             stats.sections.created++;
             
             // Добавляем в отчет
@@ -431,7 +449,10 @@ async function syncSections(stats, offset = 0, limit = 3) {
         for (const wsSubtask of filteredSubtasks) {
           if (wsSubtask.status !== 'active') continue;
           
-          const existing = existingSections.find(s => 
+          // Ищем существующий раздел по ключу (проект + источник + внешний id)
+          const existing = existingSections.find(s =>
+            s.section_project_id === project.project_id &&
+            s.external_source === 'worksection' &&
             s.external_id && s.external_id.toString() === wsSubtask.id.toString()
           );
           
@@ -497,16 +518,13 @@ async function syncSections(stats, offset = 0, limit = 3) {
             }
             
           } else {
-            // Создаем новый раздел
+            // Готовим данные для upsert (без ключевых полей)
             const sectionData = {
               section_name: wsSubtask.name,
               section_description: wsSubtask.text || null,
               section_object_id: object.object_id,
-              section_project_id: project.project_id,  // ИСПРАВЛЕНО: используем project_id из контекста
               section_start_date: wsSubtask.date_start || null,
               section_end_date: wsSubtask.date_end || null,
-              external_id: wsSubtask.id.toString(),
-              external_source: 'worksection',
               external_updated_at: new Date().toISOString()
             };
             
@@ -517,7 +535,13 @@ async function syncSections(stats, offset = 0, limit = 3) {
               logger.info(`👤 Assigned responsible to new section "${wsSubtask.name}": ${responsible.first_name} ${responsible.last_name}`);
             }
             
-            await supabase.createSection(sectionData);
+            // Идемпотентный upsert с учетом нового триггера
+            await supabase.upsertSectionByKey(
+              project.project_id,
+              'worksection',
+              wsSubtask.id.toString(),
+              sectionData
+            );
             stats.sections.created++;
             
             // Добавляем в отчет

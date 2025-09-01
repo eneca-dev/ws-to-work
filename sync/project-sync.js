@@ -164,35 +164,26 @@ async function syncStages(stats) {
             stage.external_id === tagId
           );
           
-          if (existingStage) {
-            logger.info(`Stage already exists: ${tagName} for project ${project.project_name}`);
-            continue;
-          }
-          
-          // Создаем новую стадию ДЛЯ ЭТОГО ПРОЕКТА
-          const newStage = {
+          const stageData = {
             stage_name: tagName,
-            stage_project_id: project.project_id, // Привязываем к проекту!
-            external_id: tagId,
-            external_source: 'worksection'
+            stage_description: null
           };
           
-          const createdStage = await supabase.createStage(newStage);
-          
-          if (createdStage) {
-            logger.success(`✅ Created stage: ${tagName} for project ${project.project_name}`);
-            stats.stages.created++;
-            
-            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-            stats.detailed_report.actions.push({
-              type: 'stage',
-              action: 'created',
-              name: tagName,
-              project: project.project_name,
-              external_id: tagId
-            });
+          if (existingStage) {
+            // Обновим текущее имя через update (для консистентности)
+            await supabase.updateStage(existingStage.stage_id, stageData);
+            stats.stages.updated++;
+            logger.success(`Updated stage: ${tagName} for project ${project.project_name}`);
           } else {
-            logger.error(`Failed to create stage: ${tagName} for project ${project.project_name}`);
+            // Идемпотентный upsert стадии
+            await supabase.upsertStageByKey(
+              project.project_id,
+              'worksection',
+              tagId,
+              stageData
+            );
+            stats.stages.created++;
+            logger.success(`✅ Created stage: ${tagName} for project ${project.project_name}`);
           }
         }
       }

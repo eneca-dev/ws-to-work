@@ -117,6 +117,63 @@ class SupabaseService {
       throw error;
     }
   }
+
+  // Поиск стадии по ключу (проект + источник + внешний ID)
+  async getStageByKey(projectId, externalSource, externalId) {
+    try {
+      const { data, error } = await this.client
+        .from('stages')
+        .select('*')
+        .eq('stage_project_id', projectId)
+        .eq('external_source', externalSource)
+        .eq('external_id', externalId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') throw error;
+      return data || null;
+    } catch (error) {
+      logger.error(`Error getting stage by key: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Идемпотентный upsert стадии
+  async upsertStageByKey(projectId, externalSource, externalId, data) {
+    try {
+      const existing = await this.getStageByKey(projectId, externalSource, externalId);
+      if (existing) {
+        return await this.updateStage(existing.stage_id, data);
+      }
+
+      const insertPayload = {
+        ...data,
+        stage_project_id: projectId,
+        external_source: externalSource,
+        external_id: externalId
+      };
+
+      const { data: created, error } = await this.client
+        .from('stages')
+        .insert(insertPayload)
+        .select()
+        .single();
+      if (error) throw error;
+      return created;
+    } catch (error) {
+      if (error.code === '23505') {
+        try {
+          const existing = await this.getStageByKey(projectId, externalSource, externalId);
+          if (existing) {
+            return await this.updateStage(existing.stage_id, data);
+          }
+        } catch (nestedError) {
+          logger.error(`Upsert stage (conflict) failed: ${nestedError.message}`);
+        }
+      }
+      logger.error(`Error upserting stage: ${error.message}`);
+      throw error;
+    }
+  }
   
   // Objects
   async getObjects() {
@@ -165,6 +222,65 @@ class SupabaseService {
       throw error;
     }
   }
+
+  // Поиск объекта по ключу (проект + источник + внешний ID) через стадию
+  async getObjectByKey(projectId, stageId, externalSource, externalId) {
+    try {
+      // Объект уникален в рамках стадии; для идемпотентности учитываем и проект
+      const { data, error } = await this.client
+        .from('objects')
+        .select('*, stages!inner(stage_id, stage_project_id)')
+        .eq('object_stage_id', stageId)
+        .eq('external_source', externalSource)
+        .eq('external_id', externalId)
+        .eq('stages.stage_project_id', projectId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') throw error;
+      return data || null;
+    } catch (error) {
+      logger.error(`Error getting object by key: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Идемпотентный upsert объекта
+  async upsertObjectByKey(projectId, stageId, externalSource, externalId, data) {
+    try {
+      const existing = await this.getObjectByKey(projectId, stageId, externalSource, externalId);
+      if (existing) {
+        return await this.updateObject(existing.object_id, data);
+      }
+
+      const insertPayload = {
+        ...data,
+        object_stage_id: stageId,
+        external_source: externalSource,
+        external_id: externalId
+      };
+
+      const { data: created, error } = await this.client
+        .from('objects')
+        .insert(insertPayload)
+        .select()
+        .single();
+      if (error) throw error;
+      return created;
+    } catch (error) {
+      if (error.code === '23505') {
+        try {
+          const existing = await this.getObjectByKey(projectId, stageId, externalSource, externalId);
+          if (existing) {
+            return await this.updateObject(existing.object_id, data);
+          }
+        } catch (nestedError) {
+          logger.error(`Upsert object (conflict) failed: ${nestedError.message}`);
+        }
+      }
+      logger.error(`Error upserting object: ${error.message}`);
+      throw error;
+    }
+  }
   
   // Sections
   async getSections() {
@@ -210,6 +326,68 @@ class SupabaseService {
       return result;
     } catch (error) {
       logger.error(`Error updating section: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Поиск раздела по ключу (проект + источник + внешний ID) для идемпотентной синхронизации
+  async getSectionByKey(projectId, externalSource, externalId) {
+    try {
+      const { data, error } = await this.client
+        .from('sections')
+        .select('*')
+        .eq('section_project_id', projectId)
+        .eq('external_source', externalSource)
+        .eq('external_id', externalId)
+        .single();
+
+      // PGRST116 — нет строк, возвращаем null
+      if (error && error.code !== 'PGRST116') throw error;
+      return data || null;
+    } catch (error) {
+      logger.error(`Error getting section by key: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Идемпотентный upsert раздела: сначала ищем по ключу, затем update или insert.
+  // Обрабатываем возможную конкуренцию/триггер 23505 повторно — читаем и обновляем.
+  async upsertSectionByKey(projectId, externalSource, externalId, data) {
+    try {
+      const existing = await this.getSectionByKey(projectId, externalSource, externalId);
+      if (existing) {
+        return await this.updateSection(existing.section_id, data);
+      }
+
+      // Вставка новой записи
+      const insertPayload = {
+        ...data,
+        section_project_id: projectId,
+        external_source: externalSource,
+        external_id: externalId
+      };
+
+      const { data: created, error } = await this.client
+        .from('sections')
+        .insert(insertPayload)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return created;
+    } catch (error) {
+      // Обработка конфликта уникальности, вызванного триггером в БД
+      if (error.code === '23505') {
+        try {
+          const existing = await this.getSectionByKey(projectId, externalSource, externalId);
+          if (existing) {
+            return await this.updateSection(existing.section_id, data);
+          }
+        } catch (nestedError) {
+          logger.error(`Upsert (conflict recovery) failed: ${nestedError.message}`);
+        }
+      }
+      logger.error(`Error upserting section: ${error.message}`);
       throw error;
     }
   }
