@@ -1,6 +1,7 @@
 const { createClient } = require('@supabase/supabase-js');
 const { config } = require('../config/env');
 const logger = require('../utils/logger');
+const validator = require('../utils/validator');
 
 class SupabaseService {
   constructor() {
@@ -39,12 +40,20 @@ class SupabaseService {
   
   async createProject(data) {
     try {
+      // Валидация данных перед вставкой
+      const validation = validator.validateProject(data);
+      if (!validation.valid) {
+        const errorMsg = `Project validation failed: ${validation.errors.join(', ')}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
       const { data: result, error } = await this.client
         .from('projects')
-        .insert(data)
+        .insert(validation.data)
         .select()
         .single();
-      
+
       if (error) throw error;
       return result;
     } catch (error) {
@@ -55,13 +64,21 @@ class SupabaseService {
   
   async updateProject(id, data) {
     try {
+      // Валидация данных перед обновлением
+      const validation = validator.validateProject(data);
+      if (!validation.valid) {
+        const errorMsg = `Project validation failed: ${validation.errors.join(', ')}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
       const { data: result, error } = await this.client
         .from('projects')
-        .update(data)
+        .update(validation.data)
         .eq('project_id', id)
         .select()
         .single();
-      
+
       if (error) throw error;
       return result;
     } catch (error) {
@@ -140,13 +157,36 @@ class SupabaseService {
   // Идемпотентный upsert стадии
   async upsertStageByKey(projectId, externalSource, externalId, data) {
     try {
+      // Валидация ключа дедупликации
+      const keyValidation = validator.validateDeduplicationKey(externalId, externalSource);
+      if (!keyValidation.valid) {
+        const errorMsg = `Stage deduplication key validation failed: ${keyValidation.errors.join(', ')}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      // Валидация данных
+      const validation = validator.validateStage(data);
+      if (!validation.valid) {
+        const errorMsg = `Stage validation failed: ${validation.errors.join(', ')}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
       const existing = await this.getStageByKey(projectId, externalSource, externalId);
       if (existing) {
-        return await this.updateStage(existing.stage_id, data);
+        // Проверяем нужно ли обновление (по хэшу если есть)
+        if (existing.content_hash && validation.data.content_hash) {
+          if (!validator.needsUpdate(existing.content_hash, validation.data.content_hash)) {
+            logger.info(`Stage "${validation.data.stage_name}" unchanged, skipping update`);
+            return existing;
+          }
+        }
+        return await this.updateStage(existing.stage_id, validation.data);
       }
 
       const insertPayload = {
-        ...data,
+        ...validation.data,
         stage_project_id: projectId,
         external_source: externalSource,
         external_id: externalId
@@ -161,6 +201,7 @@ class SupabaseService {
       return created;
     } catch (error) {
       if (error.code === '23505') {
+        logger.warning(`Duplicate key detected for stage, retrying...`);
         try {
           const existing = await this.getStageByKey(projectId, externalSource, externalId);
           if (existing) {
@@ -247,13 +288,36 @@ class SupabaseService {
   // Идемпотентный upsert объекта
   async upsertObjectByKey(projectId, stageId, externalSource, externalId, data) {
     try {
+      // Валидация ключа дедупликации
+      const keyValidation = validator.validateDeduplicationKey(externalId, externalSource);
+      if (!keyValidation.valid) {
+        const errorMsg = `Object deduplication key validation failed: ${keyValidation.errors.join(', ')}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      // Валидация данных
+      const validation = validator.validateObject(data);
+      if (!validation.valid) {
+        const errorMsg = `Object validation failed: ${validation.errors.join(', ')}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
       const existing = await this.getObjectByKey(projectId, stageId, externalSource, externalId);
       if (existing) {
-        return await this.updateObject(existing.object_id, data);
+        // Проверяем нужно ли обновление (по хэшу если есть)
+        if (existing.content_hash && validation.data.content_hash) {
+          if (!validator.needsUpdate(existing.content_hash, validation.data.content_hash)) {
+            logger.info(`Object "${validation.data.object_name}" unchanged, skipping update`);
+            return existing;
+          }
+        }
+        return await this.updateObject(existing.object_id, validation.data);
       }
 
       const insertPayload = {
-        ...data,
+        ...validation.data,
         object_stage_id: stageId,
         external_source: externalSource,
         external_id: externalId
@@ -268,6 +332,7 @@ class SupabaseService {
       return created;
     } catch (error) {
       if (error.code === '23505') {
+        logger.warning(`Duplicate key detected for object, retrying...`);
         try {
           const existing = await this.getObjectByKey(projectId, stageId, externalSource, externalId);
           if (existing) {
@@ -354,14 +419,37 @@ class SupabaseService {
   // Обрабатываем возможную конкуренцию/триггер 23505 повторно — читаем и обновляем.
   async upsertSectionByKey(projectId, externalSource, externalId, data) {
     try {
+      // Валидация ключа дедупликации
+      const keyValidation = validator.validateDeduplicationKey(externalId, externalSource);
+      if (!keyValidation.valid) {
+        const errorMsg = `Section deduplication key validation failed: ${keyValidation.errors.join(', ')}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      // Валидация данных
+      const validation = validator.validateSection(data);
+      if (!validation.valid) {
+        const errorMsg = `Section validation failed: ${validation.errors.join(', ')}`;
+        logger.error(errorMsg);
+        throw new Error(errorMsg);
+      }
+
       const existing = await this.getSectionByKey(projectId, externalSource, externalId);
       if (existing) {
-        return await this.updateSection(existing.section_id, data);
+        // Проверяем нужно ли обновление (по хэшу если есть)
+        if (existing.content_hash && validation.data.content_hash) {
+          if (!validator.needsUpdate(existing.content_hash, validation.data.content_hash)) {
+            logger.info(`Section "${validation.data.section_name}" unchanged, skipping update`);
+            return existing;
+          }
+        }
+        return await this.updateSection(existing.section_id, validation.data);
       }
 
       // Вставка новой записи
       const insertPayload = {
-        ...data,
+        ...validation.data,
         section_project_id: projectId,
         external_source: externalSource,
         external_id: externalId
@@ -378,6 +466,7 @@ class SupabaseService {
     } catch (error) {
       // Обработка конфликта уникальности, вызванного триггером в БД
       if (error.code === '23505') {
+        logger.warning(`Duplicate key detected for section, retrying...`);
         try {
           const existing = await this.getSectionByKey(projectId, externalSource, externalId);
           if (existing) {
