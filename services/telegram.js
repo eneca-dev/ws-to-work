@@ -3,7 +3,7 @@
 
 const axios = require('axios');
 const FormData = require('form-data');
-const config = require('../config/env');
+const { config } = require('../config/env');
 const logger = require('../utils/logger');
 
 /**
