@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const { syncProjects, syncStages } = require('./project-sync');
 const { syncObjects, syncSections } = require('./content-sync');
+const telegram = require('../services/telegram');
 
 class SyncManager {
   constructor() {
@@ -29,7 +30,10 @@ class SyncManager {
   async fullSync(offset = 0, limit = 3) {
     const startTime = Date.now();
     logger.info(`🚀 Starting sync with offset: ${offset}, limit: ${limit}`);
-    
+
+    // Отправляем уведомление о начале в Telegram
+    await telegram.sendSyncStarted(offset, limit);
+
     try {
       // Clear previous stats
       this.resetStats();
@@ -51,14 +55,29 @@ class SyncManager {
       await syncSections(this.stats, offset, limit);
       
       const duration = Date.now() - startTime;
+      const endTime = new Date();
       logger.success(`✅ Full synchronization completed in ${duration}ms`);
-      
+
       // Log final stats
       this.logFinalStats();
-      
+
       // Generate detailed report for frontend
       const detailedReport = this.generateDetailedReport(duration);
-      
+
+      // Send logs to Telegram
+      const telegramStats = {
+        projectsCreated: this.stats.projects.created,
+        projectsUpdated: this.stats.projects.updated,
+        stagesCreated: this.stats.stages.created,
+        objectsCreated: this.stats.objects.created,
+        objectsUpdated: this.stats.objects.updated,
+        sectionsCreated: this.stats.sections.created,
+        sectionsUpdated: this.stats.sections.updated,
+        errors: this.stats.projects.errors + this.stats.stages.errors +
+                this.stats.objects.errors + this.stats.sections.errors
+      };
+      await telegram.sendCsvFile(logger.getLogs(), telegramStats, new Date(startTime), endTime);
+
       return {
         success: true,
         duration,
@@ -70,6 +89,10 @@ class SyncManager {
       
     } catch (error) {
       logger.error(`❌ Full synchronization failed: ${error.message}`);
+
+      // Отправляем уведомление об ошибке в Telegram
+      await telegram.sendError(error, 'Full synchronization');
+
       throw error;
     }
   }

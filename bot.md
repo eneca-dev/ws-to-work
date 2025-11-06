@@ -1,0 +1,3 @@
+bot_id 8501740582:AAHuFmjq0hHk-uVtQfjTMOuZWRMAHJh_uXQ
+bot_name @eneca_ws_to_work_bot
+my_id 432588564

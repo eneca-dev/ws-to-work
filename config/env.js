@@ -20,6 +20,13 @@ const config = {
     batchSize: parseInt(process.env.SYNC_BATCH_SIZE) || 50,
     delayMs: parseInt(process.env.SYNC_DELAY_MS) || 1000,
     maxRetries: parseInt(process.env.SYNC_MAX_RETRIES) || 3,
+  },
+
+  // Telegram notifications (опционально)
+  telegram: {
+    botToken: process.env.TELEGRAM_BOT_TOKEN,
+    chatId: process.env.TELEGRAM_CHAT_ID,
+    enabled: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
   }
 };
 

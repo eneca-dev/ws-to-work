@@ -37,6 +37,11 @@ heroku config:set SUPABASE_URL=your_url
 heroku config:set SUPABASE_ANON_KEY=your_key
 heroku config:set WORKSECTION_DOMAIN=your_domain.worksection.com
 heroku config:set WORKSECTION_HASH=your_api_key
+
+# Optional: Telegram notifications
+heroku config:set TELEGRAM_BOT_TOKEN=your_bot_token
+heroku config:set TELEGRAM_CHAT_ID=your_chat_id
+
 git push heroku main
 ```
 
@@ -92,6 +97,12 @@ git push heroku main
 - CRUD operations for: projects, stages, objects, sections, users
 - User search with multiple strategies: email exact match, email partial, name matching, fuzzy search
 - Returns detailed statistics on all operations
+
+**services/telegram.js** (105 lines)
+- Telegram Bot API client for notifications
+- Generates CSV files with sync logs and statistics
+- Sends reports to Telegram chat after each sync
+- Optional feature (enabled when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set)
 
 **utils/logger.js** (50 lines)
 - In-memory logging system
@@ -151,8 +162,70 @@ Optional:
 - `SYNC_BATCH_SIZE` - Batch size for sync operations (default: 50)
 - `SYNC_DELAY_MS` - Delay between requests in ms (default: 1000)
 - `SYNC_MAX_RETRIES` - Max retry attempts (default: 3)
+- `TELEGRAM_BOT_TOKEN` - Telegram bot token for notifications (optional)
+- `TELEGRAM_CHAT_ID` - Telegram chat ID to send reports (optional)
 
 Create `.env` file in ws-to-work/ directory with these variables.
+
+## Telegram Notifications
+
+The system can automatically send sync reports as CSV files to Telegram after each synchronization.
+
+### Setup Instructions
+
+1. **Create Telegram Bot:**
+   - Open Telegram and find @BotFather
+   - Send `/newbot` command
+   - Follow instructions to create bot
+   - Copy the bot token (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
+
+2. **Get Your Chat ID:**
+   - Find @userinfobot in Telegram
+   - Send `/start` command
+   - Copy your user ID (format: `123456789`)
+
+3. **Set Environment Variables:**
+   ```bash
+   # Local development (.env file)
+   TELEGRAM_BOT_TOKEN=8501740582:AAHuFmjq0hHk-uVtQfjTMOuZWRMAHJh_uXQ
+   TELEGRAM_CHAT_ID=432588564
+
+   # Heroku deployment
+   heroku config:set TELEGRAM_BOT_TOKEN=8501740582:AAHuFmjq0hHk-uVtQfjTMOuZWRMAHJh_uXQ
+   heroku config:set TELEGRAM_CHAT_ID=432588564
+   ```
+
+4. **Start Bot Conversation:**
+   - Find your bot in Telegram (e.g., @eneca_ws_to_work_bot)
+   - Send `/start` command to activate it
+
+### CSV Report Format
+
+Each sync generates a CSV file with:
+- **Summary section**: Start time, duration, statistics
+- **Statistics section**: Counts of created/updated items
+- **Detailed logs**: Timestamped log entries for all operations
+
+Example filename: `sync_2025-11-06_14-30-45.csv`
+
+### Features
+
+- Automatic CSV generation after each sync
+- Emoji-enhanced summary message
+- Error counts and warnings highlighted
+- No manual intervention required
+- Fails gracefully if Telegram is unavailable
+
+### Troubleshooting
+
+If notifications aren't working:
+1. Verify bot token and chat ID are correct
+2. Ensure you've sent `/start` to the bot
+3. Check Heroku logs: `heroku logs --tail`
+4. Test bot manually: send a message to it
+5. Verify network access (Telegram API must be reachable)
+
+Note: Telegram errors won't stop the sync process - they're logged as warnings.
 
 ## Working with the Codebase
 
