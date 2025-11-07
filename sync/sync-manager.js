@@ -2,6 +2,8 @@ const logger = require('../utils/logger');
 const { syncProjects, syncStages } = require('./project-sync');
 const { syncObjects, syncSections } = require('./content-sync');
 const telegram = require('../services/telegram');
+const supabaseService = require('../services/supabase');
+const worksectionService = require('../services/worksection');
 
 class SyncManager {
   constructor() {
@@ -27,12 +29,23 @@ class SyncManager {
     };
   }
   
-  async fullSync(offset = 0, limit = 3) {
+  async fullSync(offset = 0, limit = 7, sendNotifications = true) {
     const startTime = Date.now();
     logger.info(`🚀 Starting sync with offset: ${offset}, limit: ${limit}`);
 
-    // Отправляем уведомление о начале в Telegram
-    await telegram.sendSyncStarted(offset, limit);
+    // Подсчитываем синхронизированные записи ДО синхронизации
+    logger.info('📊 Counting synced records before sync...');
+    const countBefore = await supabaseService.countSyncedRecords();
+    logger.info(`📊 Before: ${countBefore.total} синхронизированных записей ` +
+      `(projects: ${countBefore.projects}, stages: ${countBefore.stages}, ` +
+      `objects: ${countBefore.objects}, sections: ${countBefore.sections})`);
+
+    // Отправляем уведомление о начале в Telegram (только если это первый вызов)
+    if (sendNotifications && offset === 0) {
+      // Получаем список проектов для синхронизации
+      const wsProjects = await worksectionService.getProjectsWithSyncTags();
+      await telegram.sendSyncStarted(wsProjects.length, countBefore);
+    }
 
     try {
       // Clear previous stats
@@ -58,6 +71,26 @@ class SyncManager {
       const endTime = new Date();
       logger.success(`✅ Full synchronization completed in ${duration}ms`);
 
+      // Подсчитываем синхронизированные записи ПОСЛЕ синхронизации
+      logger.info('📊 Counting synced records after sync...');
+      const countAfter = await supabaseService.countSyncedRecords();
+      logger.info(`📊 After: ${countAfter.total} синхронизированных записей ` +
+        `(projects: ${countAfter.projects}, stages: ${countAfter.stages}, ` +
+        `objects: ${countAfter.objects}, sections: ${countAfter.sections})`);
+
+      // Вычисляем дельту
+      const delta = {
+        projects: countAfter.projects - countBefore.projects,
+        stages: countAfter.stages - countBefore.stages,
+        objects: countAfter.objects - countBefore.objects,
+        sections: countAfter.sections - countBefore.sections,
+        total: countAfter.total - countBefore.total
+      };
+
+      logger.success(`📈 Добавлено синхронизацией: ${delta.total} записей ` +
+        `(projects: ${delta.projects}, stages: ${delta.stages}, ` +
+        `objects: ${delta.objects}, sections: ${delta.sections})`);
+
       // Log final stats
       this.logFinalStats();
 
@@ -74,7 +107,11 @@ class SyncManager {
         sectionsCreated: this.stats.sections.created,
         sectionsUpdated: this.stats.sections.updated,
         errors: this.stats.projects.errors + this.stats.stages.errors +
-                this.stats.objects.errors + this.stats.sections.errors
+                this.stats.objects.errors + this.stats.sections.errors,
+        // Добавляем информацию о дельте
+        countBefore,
+        countAfter,
+        delta
       };
       await telegram.sendCsvFile(logger.getLogs(), telegramStats, new Date(startTime), endTime);
 

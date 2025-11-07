@@ -674,10 +674,40 @@ class SupabaseService {
   async findUserByEmail(email) {
     return this.findUser(email);
   }
-  
+
   // Deprecated: для обратной совместимости
   async findUserByName(name) {
     return this.findUser(name);
+  }
+
+  /**
+   * Подсчитывает синхронизированные записи (с external_id)
+   */
+  async countSyncedRecords() {
+    try {
+      const [
+        { count: projectsCount },
+        { count: stagesCount },
+        { count: objectsCount },
+        { count: sectionsCount }
+      ] = await Promise.all([
+        this.client.from('projects').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
+        this.client.from('stages').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
+        this.client.from('objects').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
+        this.client.from('sections').select('*', { count: 'exact', head: true }).not('external_id', 'is', null)
+      ]);
+
+      return {
+        projects: projectsCount || 0,
+        stages: stagesCount || 0,
+        objects: objectsCount || 0,
+        sections: sectionsCount || 0,
+        total: (projectsCount || 0) + (stagesCount || 0) + (objectsCount || 0) + (sectionsCount || 0)
+      };
+    } catch (error) {
+      logger.error(`Error counting synced records: ${error.message}`);
+      return { projects: 0, stages: 0, objects: 0, sections: 0, total: 0 };
+    }
   }
 }
 

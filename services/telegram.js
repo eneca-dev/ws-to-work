@@ -24,6 +24,11 @@ function formatDateForFilename(date) {
  * Форматирует дату и время для CSV
  */
 function formatDateTime(date) {
+  // Если уже строка ISO - используем как есть
+  if (typeof date === 'string') {
+    return date.replace('T', ' ').substring(0, 19);
+  }
+  // Если Date объект - конвертируем в ISO
   return date.toISOString().replace('T', ' ').substring(0, 19);
 }
 
@@ -49,6 +54,29 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   csv += `Sections Updated,${stats.sectionsUpdated}\n`;
   csv += `Total Errors,${stats.errors}\n`;
   csv += '\n';
+
+  // Добавляем информацию о дельте, если есть
+  if (stats.delta) {
+    csv += 'DELTA (Added by Sync)\n';
+    csv += `Projects Added,${stats.delta.projects}\n`;
+    csv += `Stages Added,${stats.delta.stages}\n`;
+    csv += `Objects Added,${stats.delta.objects}\n`;
+    csv += `Sections Added,${stats.delta.sections}\n`;
+    csv += `Total Added,${stats.delta.total}\n`;
+    csv += '\n';
+    csv += 'COUNT BEFORE/AFTER\n';
+    csv += `Projects Before,${stats.countBefore.projects}\n`;
+    csv += `Projects After,${stats.countAfter.projects}\n`;
+    csv += `Stages Before,${stats.countBefore.stages}\n`;
+    csv += `Stages After,${stats.countAfter.stages}\n`;
+    csv += `Objects Before,${stats.countBefore.objects}\n`;
+    csv += `Objects After,${stats.countAfter.objects}\n`;
+    csv += `Sections Before,${stats.countBefore.sections}\n`;
+    csv += `Sections After,${stats.countAfter.sections}\n`;
+    csv += `Total Before,${stats.countBefore.total}\n`;
+    csv += `Total After,${stats.countAfter.total}\n`;
+    csv += '\n';
+  }
 
   csv += 'DETAILED LOGS\n';
   csv += 'Timestamp,Level,Message\n';
@@ -89,10 +117,16 @@ async function sendMessage(text) {
 /**
  * Отправляет уведомление о начале синхронизации
  */
-async function sendSyncStarted(offset, limit) {
+async function sendSyncStarted(totalProjects, countBefore) {
   const message = `🚀 <b>Синхронизация запущена</b>\n` +
     `⏰ Время: ${formatDateTime(new Date())}\n` +
-    `📄 Параметры: offset=${offset}, limit=${limit}`;
+    `📊 Проектов в Worksection: ${totalProjects}\n` +
+    `📊 Текущее состояние базы:\n` +
+    `   📋 Проекты: ${countBefore.projects}\n` +
+    `   🎯 Стадии: ${countBefore.stages}\n` +
+    `   📦 Объекты: ${countBefore.objects}\n` +
+    `   📑 Разделы: ${countBefore.sections}\n` +
+    `   🔢 Всего: ${countBefore.total} записей`;
 
   await sendMessage(message);
 }
@@ -124,11 +158,21 @@ async function sendCsvFile(logs, stats, startTime, endTime) {
     const filename = `sync_${formatDateForFilename(endTime)}.csv`;
 
     // Формируем сообщение-заголовок
-    const caption = `📊 Синхронизация завершена\n` +
+    let caption = `📊 Синхронизация завершена\n` +
       `⏱ Длительность: ${Math.round((endTime - startTime) / 1000)}s\n` +
       `✅ Проекты: ${stats.projectsCreated} создано, ${stats.projectsUpdated} обновлено\n` +
       `📦 Объекты: ${stats.objectsCreated} создано, ${stats.objectsUpdated} обновлено\n` +
       `${stats.errors > 0 ? `❌ Ошибки: ${stats.errors}` : '✨ Без ошибок'}`;
+
+    // Добавляем информацию о дельте, если есть
+    if (stats.delta) {
+      caption += `\n\n📈 Добавлено синхронизацией:\n` +
+        `📋 Проекты: ${stats.delta.projects}\n` +
+        `🎯 Стадии: ${stats.delta.stages}\n` +
+        `📦 Объекты: ${stats.delta.objects}\n` +
+        `📑 Разделы: ${stats.delta.sections}\n` +
+        `🔢 Всего: ${stats.delta.total} записей`;
+    }
 
     // Создаем FormData для отправки файла
     const formData = new FormData();

@@ -4,6 +4,7 @@ const path = require('path');
 const { config, validateConfig } = require('./config/env');
 const syncManager = require('./sync/sync-manager');
 const logger = require('./utils/logger');
+const telegramBot = require('./services/telegram-bot');
 
 class SyncApp {
   constructor() {
@@ -35,12 +36,23 @@ class SyncApp {
       res.sendStatus(200);
     });
     
+    // Telegram webhook endpoint
+    this.app.post('/api/telegram-webhook', async (req, res) => {
+      try {
+        await telegramBot.handleUpdate(req.body);
+        res.sendStatus(200);
+      } catch (error) {
+        logger.error(`Telegram webhook error: ${error.message}`);
+        res.sendStatus(500);
+      }
+    });
+
     // Main sync endpoint
     this.app.post('/api/sync', async (req, res) => {
       try {
         // Получаем offset из query параметра (по умолчанию 0)
         const offset = parseInt(req.query.offset || '0');
-        const limit = parseInt(req.query.limit || '3');
+        const limit = parseInt(req.query.limit || '7');
         
         // Clear old logs before starting
         logger.clearLogs();
@@ -149,19 +161,37 @@ class SyncApp {
     });
   }
   
-  start() {
+  async start() {
     try {
       // Validate configuration
       validateConfig();
       logger.success('Configuration validated');
-      
+
       // Start server
-      this.app.listen(config.port, () => {
+      this.app.listen(config.port, async () => {
         logger.success(`🚀 Sync server started on port ${config.port}`);
         logger.info(`📱 Web interface: http://localhost:${config.port}`);
         logger.info(`🔌 API endpoint: http://localhost:${config.port}/api/sync`);
+
+        // Настройка Telegram бота (если включен)
+        if (config.telegram.enabled) {
+          const botInfo = await telegramBot.getBotInfo();
+          if (botInfo) {
+            logger.success(`🤖 Telegram bot connected: @${botInfo.username}`);
+            logger.info(`💬 Send /start_sync to bot to trigger synchronization`);
+
+            // Устанавливаем webhook только на Heroku (есть env переменная HEROKU_APP_NAME)
+            const herokuAppName = process.env.HEROKU_APP_NAME;
+            if (herokuAppName) {
+              const webhookUrl = `https://${herokuAppName}.herokuapp.com/api/telegram-webhook`;
+              await telegramBot.setWebhook(webhookUrl);
+            } else {
+              logger.info(`⚠️ Webhook не установлен (только для Heroku). Используйте polling для локальной разработки.`);
+            }
+          }
+        }
       });
-      
+
     } catch (error) {
       logger.error(`Failed to start server: ${error.message}`);
       process.exit(1);

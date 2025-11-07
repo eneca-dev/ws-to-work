@@ -24,9 +24,12 @@ npm start
 # Server runs on http://localhost:3001
 # Use the web interface to trigger sync or call API endpoints:
 curl -X POST http://localhost:3001/api/sync
-curl -X POST "http://localhost:3001/api/sync?offset=0&limit=3"  # Paginated sync
+curl -X POST "http://localhost:3001/api/sync?offset=0&limit=7"  # Paginated sync (default limit: 7)
 curl http://localhost:3001/api/logs
 curl http://localhost:3001/api/health
+
+# Or use Telegram bot (if configured):
+# Send /start_sync to @eneca_ws_to_work_bot
 ```
 
 ### Deployment
@@ -98,11 +101,19 @@ git push heroku main
 - User search with multiple strategies: email exact match, email partial, name matching, fuzzy search
 - Returns detailed statistics on all operations
 
-**services/telegram.js** (105 lines)
+**services/telegram.js** (~200 lines)
 - Telegram Bot API client for notifications
-- Generates CSV files with sync logs and statistics
+- Generates CSV files with sync logs, statistics, and delta
 - Sends reports to Telegram chat after each sync
+- Formats start/completion/error notifications
 - Optional feature (enabled when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set)
+
+**services/telegram-bot.js** (~140 lines)
+- Telegram bot command handler
+- Webhook endpoint for receiving bot commands
+- Processes /start_sync, /help, /start commands
+- Security: validates chat_id before executing commands
+- Auto-configures webhook on Heroku deployment
 
 **utils/logger.js** (50 lines)
 - In-memory logging system
@@ -164,6 +175,7 @@ Optional:
 - `SYNC_MAX_RETRIES` - Max retry attempts (default: 3)
 - `TELEGRAM_BOT_TOKEN` - Telegram bot token for notifications (optional)
 - `TELEGRAM_CHAT_ID` - Telegram chat ID to send reports (optional)
+- `HEROKU_APP_NAME` - Heroku app name for webhook auto-configuration (optional, Heroku only)
 
 Create `.env` file in ws-to-work/ directory with these variables.
 
@@ -199,14 +211,70 @@ The system can automatically send sync reports as CSV files to Telegram after ea
    - Find your bot in Telegram (e.g., @eneca_ws_to_work_bot)
    - Send `/start` command to activate it
 
+5. **Set Heroku App Name (for webhook):**
+   ```bash
+   # On Heroku, set app name for webhook auto-configuration
+   heroku config:set HEROKU_APP_NAME=your-app-name
+   ```
+
+### Bot Commands
+
+- `/start_sync` - Запустить полную синхронизацию Worksection → eneca.work
+- `/help` - Показать список доступных команд
+- `/start` - Приветствие и справка
+
+### Notification Flow
+
+**1. Start Notification (sent once at beginning):**
+```
+🚀 Синхронизация запущена
+⏰ Время: 2025-11-06 14:30:45
+📊 Проектов в Worksection: 52
+📊 Текущее состояние базы:
+   📋 Проекты: 48
+   🎯 Стадии: 52
+   📦 Объекты: 179
+   📑 Разделы: 1676
+   🔢 Всего: 1955 записей
+```
+
+**2. Completion Notification (sent once at end):**
+```
+📊 Синхронизация завершена
+⏱ Длительность: 81s
+✅ Проекты: 3 создано, 2 обновлено
+📦 Объекты: 15 создано, 8 обновлено
+✨ Без ошибок
+
+📈 Добавлено синхронизацией:
+📋 Проекты: 4
+🎯 Стадии: 12
+📦 Объекты: 23
+📑 Разделы: 45
+🔢 Всего: 84 записей
+
++ CSV файл с детальными логами
+```
+
+**3. Error Notification (if sync fails):**
+Sent immediately with error details and stack trace.
+
 ### CSV Report Format
 
 Each sync generates a CSV file with:
-- **Summary section**: Start time, duration, statistics
-- **Statistics section**: Counts of created/updated items
-- **Detailed logs**: Timestamped log entries for all operations
+- **SYNC SUMMARY**: Start time, finish time, duration
+- **STATISTICS**: Counts of created/updated items (projects, stages, objects, sections)
+- **DELTA (Added by Sync)**: What was actually added by this sync run
+- **COUNT BEFORE/AFTER**: Database state before and after sync
+- **DETAILED LOGS**: Timestamped log entries for all operations
 
 Example filename: `sync_2025-11-06_14-30-45.csv`
+
+This format allows you to see:
+- How many records were in the database before sync
+- How many records were added during sync
+- The final count after sync
+- Full operation logs for debugging
 
 ### Features
 
