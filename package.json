@@ -5,7 +5,8 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "sync:scheduled": "node scripts/scheduled-sync.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
