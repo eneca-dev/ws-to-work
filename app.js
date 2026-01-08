@@ -50,15 +50,21 @@ class SyncApp {
     // Main sync endpoint
     this.app.post('/api/sync', async (req, res) => {
       try {
-        // Получаем offset из query параметра (по умолчанию 0)
-        const offset = parseInt(req.query.offset || '0');
-        const limit = parseInt(req.query.limit || '7');
-        
+        // Получаем параметры из query и body
+        const offset = parseInt(req.query.offset || req.body.offset || '0');
+        const limit = parseInt(req.query.limit || req.body.limit || '7');
+        const projectId = req.body.project_id || null;
+
         // Clear old logs before starting
         logger.clearLogs();
-        logger.info(`Starting sync with offset: ${offset}, limit: ${limit}`);
-        
-        const result = await syncManager.fullSync(offset, limit);
+
+        if (projectId) {
+          logger.info(`Starting sync for project: ${projectId}`);
+        } else {
+          logger.info(`Starting sync with offset: ${offset}, limit: ${limit}`);
+        }
+
+        const result = await syncManager.fullSync(offset, limit, true, projectId);
         
         // Добавляем информацию о пагинации для фронтенда
         result.pagination = {

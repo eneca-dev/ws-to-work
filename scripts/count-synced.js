@@ -48,37 +48,6 @@ async function countTotalProjects() {
 }
 
 /**
- * Подсчитывает количество синхронизированных стадий
- */
-async function countSyncedStages() {
-  const { data, error, count } = await supabase
-    .from('stages')
-    .select('*', { count: 'exact', head: true })
-    .not('external_id', 'is', null);
-
-  if (error) {
-    throw new Error(`Ошибка подсчета стадий: ${error.message}`);
-  }
-
-  return count || 0;
-}
-
-/**
- * Подсчитывает общее количество стадий
- */
-async function countTotalStages() {
-  const { data, error, count } = await supabase
-    .from('stages')
-    .select('*', { count: 'exact', head: true });
-
-  if (error) {
-    throw new Error(`Ошибка подсчета всех стадий: ${error.message}`);
-  }
-
-  return count || 0;
-}
-
-/**
  * Подсчитывает количество синхронизированных объектов
  */
 async function countSyncedObjects() {
@@ -146,7 +115,7 @@ async function countTotalSections() {
 async function getSampleProjects(limit = 5) {
   const { data, error } = await supabase
     .from('projects')
-    .select('project_id, project_name, external_id')
+    .select('project_id, project_name, external_id, stage_type')
     .not('external_id', 'is', null)
     .limit(limit);
 
@@ -168,8 +137,6 @@ async function main() {
     const [
       syncedProjects,
       totalProjects,
-      syncedStages,
-      totalStages,
       syncedObjects,
       totalObjects,
       syncedSections,
@@ -178,8 +145,6 @@ async function main() {
     ] = await Promise.all([
       countSyncedProjects(),
       countTotalProjects(),
-      countSyncedStages(),
-      countTotalStages(),
       countSyncedObjects(),
       countTotalObjects(),
       countSyncedSections(),
@@ -194,10 +159,6 @@ async function main() {
     console.log(`   Синхронизировано: ${syncedProjects} из ${totalProjects}`);
     console.log(`   Процент: ${totalProjects > 0 ? ((syncedProjects / totalProjects) * 100).toFixed(1) : 0}%\n`);
 
-    console.log('🎯 СТАДИИ:');
-    console.log(`   Синхронизировано: ${syncedStages} из ${totalStages}`);
-    console.log(`   Процент: ${totalStages > 0 ? ((syncedStages / totalStages) * 100).toFixed(1) : 0}%\n`);
-
     console.log('📦 ОБЪЕКТЫ (задачи):');
     console.log(`   Синхронизировано: ${syncedObjects} из ${totalObjects}`);
     console.log(`   Процент: ${totalObjects > 0 ? ((syncedObjects / totalObjects) * 100).toFixed(1) : 0}%\n`);
@@ -207,8 +168,8 @@ async function main() {
     console.log(`   Процент: ${totalSections > 0 ? ((syncedSections / totalSections) * 100).toFixed(1) : 0}%\n`);
 
     // Общая статистика
-    const totalSynced = syncedProjects + syncedStages + syncedObjects + syncedSections;
-    const totalAll = totalProjects + totalStages + totalObjects + totalSections;
+    const totalSynced = syncedProjects + syncedObjects + syncedSections;
+    const totalAll = totalProjects + totalObjects + totalSections;
 
     console.log('📊 ИТОГО:');
     console.log(`   Всего синхронизировано: ${totalSynced} из ${totalAll} записей`);
@@ -219,6 +180,7 @@ async function main() {
       console.log('📝 Примеры синхронизированных проектов:');
       sampleProjects.forEach((project, index) => {
         console.log(`   ${index + 1}. ${project.project_name}`);
+        console.log(`      Стадия: ${project.stage_type || 'не указана'}`);
         console.log(`      External ID: ${project.external_id}, DB ID: ${project.project_id}`);
       });
     }

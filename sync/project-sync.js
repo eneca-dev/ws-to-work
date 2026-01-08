@@ -2,13 +2,25 @@ const worksection = require('../services/worksection');
 const supabase = require('../services/supabase');
 const logger = require('../utils/logger');
 
-async function syncProjects(stats, offset = 0, limit = 3) {
+// Извлекает стадию из тегов проекта Worksection
+function extractStageFromTags(wsProject) {
+  if (!wsProject.tags) return null;
+
+  for (const tagName of Object.values(wsProject.tags)) {
+    if (tagName && tagName.includes('Стадия')) {
+      return tagName;
+    }
+  }
+  return null;
+}
+
+async function syncProjects(stats, offset = 0, limit = 3, projectId = null) {
   try {
     const wsProjects = await worksection.getProjectsWithSyncTags();
     const supaProjects = await supabase.getProjects();
-    
+
     // Фильтруем проекты начинающиеся с "!"
-    const filteredProjects = wsProjects.filter(project => {
+    let filteredProjects = wsProjects.filter(project => {
       if (project.name && project.name.startsWith('!')) {
         logger.info(`🚫 Skipping project starting with "!": ${project.name}`);
         stats.projects.skipped = (stats.projects.skipped || 0) + 1;
@@ -16,29 +28,48 @@ async function syncProjects(stats, offset = 0, limit = 3) {
       }
       return true;
     });
-    
-    logger.info(`Found ${wsProjects.length} projects with sync tag (${filteredProjects.length} after filtering)`);
-    
-    // Применяем offset и limit для пагинации
-    const paginatedProjects = filteredProjects.slice(offset, offset + limit);
-    logger.warning(`⚠️ Processing projects ${offset + 1}-${offset + paginatedProjects.length} of ${filteredProjects.length} total`);
-    
+
+    // Если указан конкретный projectId - фильтруем только его
+    if (projectId) {
+      filteredProjects = filteredProjects.filter(p => p.id.toString() === projectId.toString());
+      if (filteredProjects.length === 0) {
+        logger.warning(`⚠️ Project ${projectId} not found in Worksection sync projects`);
+        return;
+      }
+      logger.info(`🎯 Syncing specific project: ${filteredProjects[0].name} (ID: ${projectId})`);
+    } else {
+      logger.info(`Found ${wsProjects.length} projects with sync tag (${filteredProjects.length} after filtering)`);
+    }
+
+    // Применяем offset и limit для пагинации (только если не указан конкретный проект)
+    const paginatedProjects = projectId ? filteredProjects : filteredProjects.slice(offset, offset + limit);
+    if (!projectId) {
+      logger.warning(`⚠️ Processing projects ${offset + 1}-${offset + paginatedProjects.length} of ${filteredProjects.length} total`);
+    }
+
     for (const wsProject of paginatedProjects) {
       try {
         // Определяем тип синхронизации проекта
         const syncType = worksection.determineProjectSyncType(wsProject);
         logger.info(`📋 Processing project "${wsProject.name}" (sync type: ${syncType})`);
-        
-        const existing = supaProjects.find(p => 
+
+        // Извлекаем стадию из тегов проекта
+        const stageType = extractStageFromTags(wsProject);
+        if (stageType) {
+          logger.info(`🏷️ Found stage: ${stageType} for project "${wsProject.name}"`);
+        }
+
+        const existing = supaProjects.find(p =>
           p.external_id && p.external_id.toString() === wsProject.id.toString()
         );
-        
+
         if (existing) {
           // Update existing project
           const updateData = {
             project_name: wsProject.name,
             project_description: wsProject.description || null,
-            external_updated_at: new Date().toISOString()
+            external_updated_at: new Date().toISOString(),
+            stage_type: stageType
           };
           
           // Find and assign manager using enhanced search
@@ -62,6 +93,7 @@ async function syncProjects(stats, offset = 0, limit = 3) {
             name: wsProject.name,
             timestamp: new Date().toISOString(),
             sync_type: syncType,
+            stage_type: stageType,
             manager_assigned: !!manager,
             manager_info: manager ? `${manager.first_name} ${manager.last_name} (${manager.email})` : null
           });
@@ -75,7 +107,8 @@ async function syncProjects(stats, offset = 0, limit = 3) {
             project_description: wsProject.description || null,
             external_id: wsProject.id.toString(),
             external_source: 'worksection',
-            external_updated_at: new Date().toISOString()
+            external_updated_at: new Date().toISOString(),
+            stage_type: stageType
           };
           
           // Find and assign manager using enhanced search
@@ -90,7 +123,7 @@ async function syncProjects(stats, offset = 0, limit = 3) {
           await supabase.createProject(projectData);
           stats.projects.created++;
           
-                    // Добавляем детальную информацию в отчет  
+          // Добавляем детальную информацию в отчет
           if (!stats.detailed_report) stats.detailed_report = { actions: [] };
           stats.detailed_report.actions.push({
             action: 'created',
@@ -99,6 +132,7 @@ async function syncProjects(stats, offset = 0, limit = 3) {
             name: wsProject.name,
             timestamp: new Date().toISOString(),
             sync_type: syncType,
+            stage_type: stageType,
             manager_assigned: !!manager,
             manager_info: manager ? `${manager.first_name} ${manager.last_name} (${manager.email})` : null
           });
@@ -125,74 +159,6 @@ async function syncProjects(stats, offset = 0, limit = 3) {
     
   } catch (error) {
     logger.error(`Projects sync error: ${error.message}`);
-    throw error;
-  }
-}
-
-async function syncStages(stats) {
-  try {
-    const supaProjects = await supabase.getProjectsWithExternalId();
-    const existingStages = await supabase.getStages();
-    
-    for (const project of supaProjects) {
-      logger.info(`🎯 Syncing stages for project: ${project.project_name}`);
-      
-      // Получаем данные проекта из Worksection
-      const wsProjects = await worksection.getProjectsWithTag();
-      const wsProject = wsProjects.find(p => 
-        p.id && p.id.toString() === project.external_id.toString()
-      );
-      
-      if (!wsProject) {
-        logger.warning(`Project not found in Worksection: ${project.project_name}`);
-        continue;
-      }
-      
-      if (!wsProject.tags) {
-        logger.info(`No tags found for project: ${project.project_name}`);
-        continue;
-      }
-      
-      // Ищем метки стадий в проекте
-      for (const [tagId, tagName] of Object.entries(wsProject.tags)) {
-        if (tagName && tagName.includes('Стадия')) {
-          logger.info(`🏷️ Found stage tag: ${tagName} (${tagId}) for project ${project.project_name}`);
-          
-          // Проверяем, есть ли уже такая стадия ДЛЯ ЭТОГО ПРОЕКТА
-          const existingStage = existingStages.find(stage => 
-            stage.stage_project_id === project.project_id && 
-            stage.external_id === tagId
-          );
-          
-          const stageData = {
-            stage_name: tagName,
-            stage_description: null
-          };
-          
-          if (existingStage) {
-            // Обновим текущее имя через update (для консистентности)
-            await supabase.updateStage(existingStage.stage_id, stageData);
-            stats.stages.updated++;
-            logger.success(`Updated stage: ${tagName} for project ${project.project_name}`);
-          } else {
-            // Идемпотентный upsert стадии
-            await supabase.upsertStageByKey(
-              project.project_id,
-              'worksection',
-              tagId,
-              stageData
-            );
-            stats.stages.created++;
-            logger.success(`✅ Created stage: ${tagName} for project ${project.project_name}`);
-          }
-        }
-      }
-    }
-    
-    logger.success(`✅ Stages sync completed`);
-    
-  } catch (error) {
-    logger.error(`Stages sync error: ${error.message}`);
     throw error;
   }
 }
@@ -238,4 +204,4 @@ async function findUserByEmail(email, stats) {
   }
 }
 
-module.exports = { syncProjects, syncStages }; 
+module.exports = { syncProjects }; 

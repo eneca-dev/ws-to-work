@@ -87,135 +87,6 @@ class SupabaseService {
     }
   }
   
-  // Stages
-  async getStages() {
-    try {
-      const { data, error } = await this.client
-        .from('stages')
-        .select('*');
-      
-      if (error) throw error;
-      return data || [];
-    } catch (error) {
-      logger.error(`Error getting stages: ${error.message}`);
-      throw error;
-    }
-  }
-  
-  async createStage(data) {
-    try {
-      const { data: result, error } = await this.client
-        .from('stages')
-        .insert(data)
-        .select()
-        .single();
-      
-      if (error) throw error;
-      return result;
-    } catch (error) {
-      logger.error(`Error creating stage: ${error.message}`);
-      throw error;
-    }
-  }
-  
-  async updateStage(id, data) {
-    try {
-      const { data: result, error } = await this.client
-        .from('stages')
-        .update(data)
-        .eq('stage_id', id)
-        .select()
-        .single();
-      
-      if (error) throw error;
-      return result;
-    } catch (error) {
-      logger.error(`Error updating stage: ${error.message}`);
-      throw error;
-    }
-  }
-
-  // Поиск стадии по ключу (проект + источник + внешний ID)
-  async getStageByKey(projectId, externalSource, externalId) {
-    try {
-      const { data, error } = await this.client
-        .from('stages')
-        .select('*')
-        .eq('stage_project_id', projectId)
-        .eq('external_source', externalSource)
-        .eq('external_id', externalId)
-        .single();
-
-      if (error && error.code !== 'PGRST116') throw error;
-      return data || null;
-    } catch (error) {
-      logger.error(`Error getting stage by key: ${error.message}`);
-      throw error;
-    }
-  }
-
-  // Идемпотентный upsert стадии
-  async upsertStageByKey(projectId, externalSource, externalId, data) {
-    try {
-      // Валидация ключа дедупликации
-      const keyValidation = validator.validateDeduplicationKey(externalId, externalSource);
-      if (!keyValidation.valid) {
-        const errorMsg = `Stage deduplication key validation failed: ${keyValidation.errors.join(', ')}`;
-        logger.error(errorMsg);
-        throw new Error(errorMsg);
-      }
-
-      // Валидация данных
-      const validation = validator.validateStage(data);
-      if (!validation.valid) {
-        const errorMsg = `Stage validation failed: ${validation.errors.join(', ')}`;
-        logger.error(errorMsg);
-        throw new Error(errorMsg);
-      }
-
-      const existing = await this.getStageByKey(projectId, externalSource, externalId);
-      if (existing) {
-        // Проверяем нужно ли обновление (по хэшу если есть)
-        if (existing.content_hash && validation.data.content_hash) {
-          if (!validator.needsUpdate(existing.content_hash, validation.data.content_hash)) {
-            logger.info(`Stage "${validation.data.stage_name}" unchanged, skipping update`);
-            return existing;
-          }
-        }
-        return await this.updateStage(existing.stage_id, validation.data);
-      }
-
-      const insertPayload = {
-        ...validation.data,
-        stage_project_id: projectId,
-        external_source: externalSource,
-        external_id: externalId
-      };
-
-      const { data: created, error } = await this.client
-        .from('stages')
-        .insert(insertPayload)
-        .select()
-        .single();
-      if (error) throw error;
-      return created;
-    } catch (error) {
-      if (error.code === '23505') {
-        logger.warning(`Duplicate key detected for stage, retrying...`);
-        try {
-          const existing = await this.getStageByKey(projectId, externalSource, externalId);
-          if (existing) {
-            return await this.updateStage(existing.stage_id, data);
-          }
-        } catch (nestedError) {
-          logger.error(`Upsert stage (conflict) failed: ${nestedError.message}`);
-        }
-      }
-      logger.error(`Error upserting stage: ${error.message}`);
-      throw error;
-    }
-  }
-  
   // Objects
   async getObjects() {
     try {
@@ -255,7 +126,7 @@ class SupabaseService {
         .eq('object_id', id)
         .select()
         .single();
-      
+
       if (error) throw error;
       return result;
     } catch (error) {
@@ -264,29 +135,27 @@ class SupabaseService {
     }
   }
 
-  // Поиск объекта по ключу (проект + источник + внешний ID) через стадию
-  async getObjectByKey(projectId, stageId, externalSource, externalId) {
+  // Поиск объекта по ключу (проект + источник + внешний ID) - напрямую через project_id
+  async getObjectByProjectKey(projectId, externalSource, externalId) {
     try {
-      // Объект уникален в рамках стадии; для идемпотентности учитываем и проект
       const { data, error } = await this.client
         .from('objects')
-        .select('*, stages!inner(stage_id, stage_project_id)')
-        .eq('object_stage_id', stageId)
+        .select('*')
+        .eq('object_project_id', projectId)
         .eq('external_source', externalSource)
         .eq('external_id', externalId)
-        .eq('stages.stage_project_id', projectId)
         .single();
 
       if (error && error.code !== 'PGRST116') throw error;
       return data || null;
     } catch (error) {
-      logger.error(`Error getting object by key: ${error.message}`);
+      logger.error(`Error getting object by project key: ${error.message}`);
       throw error;
     }
   }
 
-  // Идемпотентный upsert объекта
-  async upsertObjectByKey(projectId, stageId, externalSource, externalId, data) {
+  // Идемпотентный upsert объекта - привязка к проекту напрямую
+  async upsertObjectByProjectKey(projectId, externalSource, externalId, data) {
     try {
       // Валидация ключа дедупликации
       const keyValidation = validator.validateDeduplicationKey(externalId, externalSource);
@@ -304,7 +173,7 @@ class SupabaseService {
         throw new Error(errorMsg);
       }
 
-      const existing = await this.getObjectByKey(projectId, stageId, externalSource, externalId);
+      const existing = await this.getObjectByProjectKey(projectId, externalSource, externalId);
       if (existing) {
         // Проверяем нужно ли обновление (по хэшу если есть)
         if (existing.content_hash && validation.data.content_hash) {
@@ -318,7 +187,7 @@ class SupabaseService {
 
       const insertPayload = {
         ...validation.data,
-        object_stage_id: stageId,
+        object_project_id: projectId,
         external_source: externalSource,
         external_id: externalId
       };
@@ -334,9 +203,10 @@ class SupabaseService {
       if (error.code === '23505') {
         logger.warning(`Duplicate key detected for object, retrying...`);
         try {
-          const existing = await this.getObjectByKey(projectId, stageId, externalSource, externalId);
+          const existing = await this.getObjectByProjectKey(projectId, externalSource, externalId);
           if (existing) {
-            return await this.updateObject(existing.object_id, data);
+            const validation = validator.validateObject(data);
+            return await this.updateObject(existing.object_id, validation.data);
           }
         } catch (nestedError) {
           logger.error(`Upsert object (conflict) failed: ${nestedError.message}`);
@@ -346,7 +216,7 @@ class SupabaseService {
       throw error;
     }
   }
-  
+
   // Sections
   async getSections() {
     try {
@@ -687,26 +557,23 @@ class SupabaseService {
     try {
       const [
         { count: projectsCount },
-        { count: stagesCount },
         { count: objectsCount },
         { count: sectionsCount }
       ] = await Promise.all([
         this.client.from('projects').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
-        this.client.from('stages').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
         this.client.from('objects').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
         this.client.from('sections').select('*', { count: 'exact', head: true }).not('external_id', 'is', null)
       ]);
 
       return {
         projects: projectsCount || 0,
-        stages: stagesCount || 0,
         objects: objectsCount || 0,
         sections: sectionsCount || 0,
-        total: (projectsCount || 0) + (stagesCount || 0) + (objectsCount || 0) + (sectionsCount || 0)
+        total: (projectsCount || 0) + (objectsCount || 0) + (sectionsCount || 0)
       };
     } catch (error) {
       logger.error(`Error counting synced records: ${error.message}`);
-      return { projects: 0, stages: 0, objects: 0, sections: 0, total: 0 };
+      return { projects: 0, objects: 0, sections: 0, total: 0 };
     }
   }
 }
