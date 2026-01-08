@@ -2,91 +2,65 @@ const worksection = require('../services/worksection');
 const supabase = require('../services/supabase');
 const logger = require('../utils/logger');
 
-async function syncObjects(stats, offset = 0, limit = 3) {
+async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
   try {
-    const supaProjects = await supabase.getProjectsWithExternalId();
+    let supaProjects = await supabase.getProjectsWithExternalId();
     const existingObjects = await supabase.getObjects();
-    
+
     // ⚡ ОПТИМИЗАЦИЯ: получаем wsProjects ОДИН раз для всех проектов
     const wsProjects = await worksection.getProjectsWithSyncTags();
-    
-    // Применяем offset и limit для пагинации
-    const paginatedProjects = supaProjects.slice(offset, offset + limit);
-    logger.warning(`⚠️ Objects: Processing projects ${offset + 1}-${offset + paginatedProjects.length} of ${supaProjects.length} total`);
-    
+
+    // Если указан конкретный projectId - фильтруем только его
+    if (projectId) {
+      supaProjects = supaProjects.filter(p => p.external_id && p.external_id.toString() === projectId.toString());
+      if (supaProjects.length === 0) {
+        logger.warning(`⚠️ Project ${projectId} not found in Supabase`);
+        return;
+      }
+      logger.info(`🎯 Syncing objects for specific project: ${supaProjects[0].project_name}`);
+    }
+
+    // Применяем offset и limit для пагинации (только если не указан конкретный проект)
+    const paginatedProjects = projectId ? supaProjects : supaProjects.slice(offset, offset + limit);
+    if (!projectId) {
+      logger.warning(`⚠️ Objects: Processing projects ${offset + 1}-${offset + paginatedProjects.length} of ${supaProjects.length} total`);
+    }
+
     for (const project of paginatedProjects) {
       logger.info(`📦 Syncing objects for project: ${project.project_name}`);
-      
-      // Читаем стадии заново для каждого проекта (они могли быть созданы в syncStages)
-      const existingStages = await supabase.getStages();
-      
+
       // Находим данные проекта из уже полученного списка
-      const wsProject = wsProjects.find(p => 
+      const wsProject = wsProjects.find(p =>
         p.id && p.id.toString() === project.external_id.toString()
       );
-      
+
       if (!wsProject) {
         logger.warning(`Project not found in Worksection: ${project.project_name}`);
         continue;
       }
-      
+
       // Определяем тип синхронизации проекта
       const syncType = worksection.determineProjectSyncType(wsProject);
       logger.info(`📦 Project "${project.project_name}" sync type: ${syncType}`);
-      
-      // Определяем стадию проекта
-      let projectStage = null;
-      if (wsProject && wsProject.tags) {
-        // Ищем метку стадии в проекте
-        for (const [tagId, tagName] of Object.entries(wsProject.tags)) {
-          if (tagName && tagName.includes('Стадия')) {
-            // Ищем стадию ДЛЯ ЭТОГО ПРОЕКТА с этим tag ID
-            projectStage = existingStages.find(stage => 
-              stage.stage_project_id === project.project_id && 
-              stage.external_id === tagId
-            );
-            
-            if (projectStage) {
-              logger.info(`Found stage for project ${project.project_name}: ${tagName}`);
-              break;
-            }
-          }
-        }
-      }
-      
-      if (!projectStage) {
-        logger.warning(`No stage found for project: ${project.project_name}. Skipping objects.`);
-        continue;
-      }
-      
+
       // Логика зависит от типа синхронизации
       if (syncType === 'os') {
         // OS проекты: создаем объект-заглушку с именем проекта
         logger.info(`📦 OS Project: Creating placeholder object for project ${project.project_name}`);
-        
-        const placeholderExternalId = `${project.external_id}_${projectStage.external_id}_placeholder`;
-        
+
+        const placeholderExternalId = `${project.external_id}_placeholder`;
+
         // Проверяем существующий объект-заглушку
-        const existingPlaceholder = existingObjects.find(obj => 
-          obj.external_id === placeholderExternalId && 
+        const existingPlaceholder = existingObjects.find(obj =>
+          obj.external_id === placeholderExternalId &&
           obj.external_source === 'worksection-os' &&
-          obj.object_stage_id === projectStage.stage_id
+          obj.object_project_id === project.project_id
         );
-        
+
         if (!existingPlaceholder) {
-          // Создаем объект-заглушку
-          const placeholderObject = {
-            object_name: project.project_name,
-            object_description: `Объект-заглушка для OS проекта: ${project.project_name}`,
-            object_stage_id: projectStage.stage_id,
-            external_id: placeholderExternalId,
-            external_source: 'worksection-os'
-          };
-          
           try {
-            const createdObject = await supabase.upsertObjectByKey(
+            const createdObject = await supabase.upsertObjectByProjectKey(
               project.project_id,
-              projectStage.stage_id,
               'worksection-os',
               placeholderExternalId,
               {
@@ -94,17 +68,16 @@ async function syncObjects(stats, offset = 0, limit = 3) {
                 object_description: `Объект-заглушка для OS проекта: ${project.project_name}`
               }
             );
-            
+
             if (createdObject) {
-              logger.success(`✅ Created OS placeholder object: ${project.project_name} in stage ${projectStage.stage_name}`);
+              logger.success(`✅ Created OS placeholder object: ${project.project_name}`);
               stats.objects.created++;
-              
+
               if (!stats.detailed_report) stats.detailed_report = { actions: [] };
               stats.detailed_report.actions.push({
                 type: 'object',
                 action: 'created',
                 name: project.project_name + ' (placeholder)',
-                stage: projectStage.stage_name,
                 project: project.project_name,
                 external_id: placeholderExternalId,
                 sync_type: 'os'
@@ -118,135 +91,134 @@ async function syncObjects(stats, offset = 0, limit = 3) {
           logger.info(`✅ OS placeholder object already exists: ${project.project_name}`);
           stats.objects.unchanged++;
         }
-        
+
       } else {
         // Стандартные проекты: используем существующую логику с task groups
         logger.info(`📦 Standard Project: Processing task groups for ${project.project_name}`);
-        
+
         // Получаем задачи проекта из Worksection
         const wsTasks = await worksection.getProjectTasks(project.external_id);
-        
+
         // Фильтруем Task Groups (задачи с подзадачами) и не начинающиеся с "!"
-        const taskGroups = wsTasks.filter(task => 
+        const taskGroups = wsTasks.filter(task =>
           task.child && task.child.length > 0 && !task.name.startsWith('!')
         );
-        
+
         logger.info(`Found ${taskGroups.length} task groups for project ${project.project_name}`);
-      
-      for (const taskGroup of taskGroups) {
-        if (taskGroup.status !== 'active') {
-          logger.info(`🚫 Skipping inactive task group: ${taskGroup.name}`);
-          continue;
-        }
-        
-        // Проверяем существующий объект В ПРАВИЛЬНОЙ СТАДИИ
-        const existingObject = existingObjects.find(obj => 
-          obj.external_id === taskGroup.id.toString() && 
-          obj.external_source === 'worksection' &&
-          obj.object_stage_id === projectStage.stage_id  // Объект должен быть в правильной стадии!
-        );
-        
-        // Проверяем есть ли объект в других стадиях (неправильных)
-        const objectInWrongStage = existingObjects.find(obj => 
-          obj.external_id === taskGroup.id.toString() && 
-          obj.external_source === 'worksection' &&
-          obj.object_stage_id !== projectStage.stage_id  // Объект в неправильной стадии
-        );
-        
-        if (existingObject) {
-          logger.info(`✅ Object already exists in correct stage: ${taskGroup.name}`);
-          continue;
-        }
-        
-        if (objectInWrongStage) {
-          // Перемещаем объект в правильную стадию
-          logger.info(`🔄 Moving object to correct stage: ${taskGroup.name}`);
-          
-          const updateData = {
-            object_stage_id: projectStage.stage_id,
-            object_name: taskGroup.name,  // Обновляем название на всякий случай
-            object_description: taskGroup.text || '',
-            external_updated_at: new Date().toISOString()
+
+        for (const taskGroup of taskGroups) {
+          if (taskGroup.status !== 'active') {
+            logger.info(`🚫 Skipping inactive task group: ${taskGroup.name}`);
+            continue;
+          }
+
+          // Проверяем существующий объект для этого проекта
+          const existingObject = existingObjects.find(obj =>
+            obj.external_id === taskGroup.id.toString() &&
+            obj.external_source === 'worksection' &&
+            obj.object_project_id === project.project_id
+          );
+
+          if (existingObject) {
+            // Обновляем если изменилось название
+            if (existingObject.object_name !== taskGroup.name) {
+              const updateData = {
+                object_name: taskGroup.name,
+                object_description: taskGroup.text || '',
+                external_updated_at: new Date().toISOString()
+              };
+
+              try {
+                await supabase.updateObject(existingObject.object_id, updateData);
+                logger.success(`✅ Updated object: ${taskGroup.name}`);
+                stats.objects.updated++;
+
+                if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+                stats.detailed_report.actions.push({
+                  type: 'object',
+                  action: 'updated',
+                  name: taskGroup.name,
+                  project: project.project_name,
+                  external_id: taskGroup.id.toString()
+                });
+              } catch (error) {
+                logger.error(`Failed to update object ${taskGroup.name}: ${error.message}`);
+                stats.objects.errors++;
+              }
+            } else {
+              logger.info(`✅ Object unchanged: ${taskGroup.name}`);
+              stats.objects.unchanged++;
+            }
+            continue;
+          }
+
+          // Создаем новый объект и привязываем к проекту напрямую
+          const newObjectData = {
+            object_name: taskGroup.name,
+            object_description: taskGroup.text || ''
           };
-          
+
           try {
-            await supabase.updateObject(objectInWrongStage.object_id, updateData);
-            logger.success(`✅ Moved object: ${taskGroup.name} to stage ${projectStage.stage_name}`);
-            stats.objects.updated++;
-            
-            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-            stats.detailed_report.actions.push({
-              type: 'object',
-              action: 'moved',
-              name: taskGroup.name,
-              stage: projectStage.stage_name,
-              project: project.project_name,
-              external_id: taskGroup.id.toString()
-            });
+            const createdObject = await supabase.upsertObjectByProjectKey(
+              project.project_id,
+              'worksection',
+              taskGroup.id.toString(),
+              newObjectData
+            );
+
+            if (createdObject) {
+              logger.success(`✅ Created object: ${taskGroup.name} for project ${project.project_name}`);
+              stats.objects.created++;
+
+              if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+              stats.detailed_report.actions.push({
+                type: 'object',
+                action: 'created',
+                name: taskGroup.name,
+                project: project.project_name,
+                external_id: taskGroup.id.toString()
+              });
+            }
           } catch (error) {
-            logger.error(`Failed to move object ${taskGroup.name}: ${error.message}`);
+            logger.error(`Failed to create object ${taskGroup.name}: ${error.message}`);
             stats.objects.errors++;
           }
-          continue;
         }
-        
-        // Создаем новый объект и привязываем к найденной стадии проекта
-        const newObjectData = {
-          object_name: taskGroup.name,
-          object_description: taskGroup.text || ''
-        };
-        
-        try {
-          const createdObject = await supabase.upsertObjectByKey(
-            project.project_id,
-            projectStage.stage_id,
-            'worksection',
-            taskGroup.id.toString(),
-            newObjectData
-          );
-          
-          if (createdObject) {
-            logger.success(`✅ Created object: ${taskGroup.name} in stage ${projectStage.stage_name}`);
-            stats.objects.created++;
-            
-            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-            stats.detailed_report.actions.push({
-              type: 'object',
-              action: 'created',
-              name: taskGroup.name,
-              stage: projectStage.stage_name,
-              project: project.project_name,
-              external_id: taskGroup.id.toString()
-            });
-          }
-        } catch (error) {
-          logger.error(`Failed to create object ${taskGroup.name}: ${error.message}`);
-          stats.objects.errors++;
-        }
-      }
       } // конец else блока для стандартных проектов
     }
-    
+
     logger.success(`✅ Objects sync completed`);
-    
+
   } catch (error) {
     logger.error(`Objects sync error: ${error.message}`);
     throw error;
   }
 }
 
-async function syncSections(stats, offset = 0, limit = 3) {
+async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
   try {
-    const supaProjects = await supabase.getProjectsWithExternalId();
+    let supaProjects = await supabase.getProjectsWithExternalId();
     const existingObjects = await supabase.getObjects();
     const existingSections = await supabase.getSections();
-    
+
     // ⚡ ОПТИМИЗАЦИЯ: получаем wsProjects ОДИН раз для всех проектов
     const wsProjects = await worksection.getProjectsWithSyncTags();
-    
-    // Применяем offset и limit для пагинации
-    const paginatedProjects = supaProjects.slice(offset, offset + limit);
-    logger.warning(`⚠️ Sections: Processing projects ${offset + 1}-${offset + paginatedProjects.length} of ${supaProjects.length} total`);
+
+    // Если указан конкретный projectId - фильтруем только его
+    if (projectId) {
+      supaProjects = supaProjects.filter(p => p.external_id && p.external_id.toString() === projectId.toString());
+      if (supaProjects.length === 0) {
+        logger.warning(`⚠️ Project ${projectId} not found in Supabase for sections sync`);
+        return;
+      }
+      logger.info(`🎯 Syncing sections for specific project: ${supaProjects[0].project_name}`);
+    }
+
+    // Применяем offset и limit для пагинации (только если не указан конкретный проект)
+    const paginatedProjects = projectId ? supaProjects : supaProjects.slice(offset, offset + limit);
+    if (!projectId) {
+      logger.warning(`⚠️ Sections: Processing projects ${offset + 1}-${offset + paginatedProjects.length} of ${supaProjects.length} total`);
+    }
     
     for (const project of paginatedProjects) {
       logger.info(`📑 Syncing sections for project: ${project.project_name}`);

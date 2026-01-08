@@ -1,5 +1,5 @@
 const logger = require('../utils/logger');
-const { syncProjects, syncStages } = require('./project-sync');
+const { syncProjects } = require('./project-sync');
 const { syncObjects, syncSections } = require('./content-sync');
 const telegram = require('../services/telegram');
 const supabaseService = require('../services/supabase');
@@ -9,7 +9,6 @@ class SyncManager {
   constructor() {
     this.stats = {
       projects: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
-      stages: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       objects: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       sections: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       assignments: { attempted: 0, successful: 0, failed: 0 },
@@ -29,16 +28,19 @@ class SyncManager {
     };
   }
   
-  async fullSync(offset = 0, limit = 7, sendNotifications = true) {
+  async fullSync(offset = 0, limit = 7, sendNotifications = true, projectId = null) {
     const startTime = Date.now();
-    logger.info(`🚀 Starting sync with offset: ${offset}, limit: ${limit}`);
+    if (projectId) {
+      logger.info(`🚀 Starting sync for specific project: ${projectId}`);
+    } else {
+      logger.info(`🚀 Starting sync with offset: ${offset}, limit: ${limit}`);
+    }
 
     // Подсчитываем синхронизированные записи ДО синхронизации
     logger.info('📊 Counting synced records before sync...');
     const countBefore = await supabaseService.countSyncedRecords();
     logger.info(`📊 Before: ${countBefore.total} синхронизированных записей ` +
-      `(projects: ${countBefore.projects}, stages: ${countBefore.stages}, ` +
-      `objects: ${countBefore.objects}, sections: ${countBefore.sections})`);
+      `(projects: ${countBefore.projects}, objects: ${countBefore.objects}, sections: ${countBefore.sections})`);
 
     // Отправляем уведомление о начале в Telegram (только если это первый вызов)
     if (sendNotifications && offset === 0) {
@@ -51,21 +53,17 @@ class SyncManager {
       // Clear previous stats
       this.resetStats();
       
-      // Step 1: Sync projects
-      logger.info('📋 Step 1/4: Syncing projects');
-      await syncProjects(this.stats, offset, limit);
-      
-      // Step 2: Sync stages
-      logger.info('🎯 Step 2/4: Syncing stages');
-      await syncStages(this.stats);
-      
-      // Step 3: Sync objects
-      logger.info('📦 Step 3/4: Syncing objects');
-      await syncObjects(this.stats, offset, limit);
-      
-      // Step 4: Sync sections
-      logger.info('📑 Step 4/4: Syncing sections');
-      await syncSections(this.stats, offset, limit);
+      // Step 1: Sync projects (включая stage_type из тегов)
+      logger.info('📋 Step 1/3: Syncing projects');
+      await syncProjects(this.stats, offset, limit, projectId);
+
+      // Step 2: Sync objects
+      logger.info('📦 Step 2/3: Syncing objects');
+      await syncObjects(this.stats, offset, limit, projectId);
+
+      // Step 3: Sync sections
+      logger.info('📑 Step 3/3: Syncing sections');
+      await syncSections(this.stats, offset, limit, projectId);
       
       const duration = Date.now() - startTime;
       const endTime = new Date();
@@ -75,21 +73,18 @@ class SyncManager {
       logger.info('📊 Counting synced records after sync...');
       const countAfter = await supabaseService.countSyncedRecords();
       logger.info(`📊 After: ${countAfter.total} синхронизированных записей ` +
-        `(projects: ${countAfter.projects}, stages: ${countAfter.stages}, ` +
-        `objects: ${countAfter.objects}, sections: ${countAfter.sections})`);
+        `(projects: ${countAfter.projects}, objects: ${countAfter.objects}, sections: ${countAfter.sections})`);
 
       // Вычисляем дельту
       const delta = {
         projects: countAfter.projects - countBefore.projects,
-        stages: countAfter.stages - countBefore.stages,
         objects: countAfter.objects - countBefore.objects,
         sections: countAfter.sections - countBefore.sections,
         total: countAfter.total - countBefore.total
       };
 
       logger.success(`📈 Добавлено синхронизацией: ${delta.total} записей ` +
-        `(projects: ${delta.projects}, stages: ${delta.stages}, ` +
-        `objects: ${delta.objects}, sections: ${delta.sections})`);
+        `(projects: ${delta.projects}, objects: ${delta.objects}, sections: ${delta.sections})`);
 
       // Log final stats
       this.logFinalStats();
@@ -101,13 +96,11 @@ class SyncManager {
       const telegramStats = {
         projectsCreated: this.stats.projects.created,
         projectsUpdated: this.stats.projects.updated,
-        stagesCreated: this.stats.stages.created,
         objectsCreated: this.stats.objects.created,
         objectsUpdated: this.stats.objects.updated,
         sectionsCreated: this.stats.sections.created,
         sectionsUpdated: this.stats.sections.updated,
-        errors: this.stats.projects.errors + this.stats.stages.errors +
-                this.stats.objects.errors + this.stats.sections.errors,
+        errors: this.stats.projects.errors + this.stats.objects.errors + this.stats.sections.errors,
         // Добавляем информацию о дельте
         countBefore,
         countAfter,
@@ -144,7 +137,6 @@ class SyncManager {
       },
       actions_by_type: {
         projects: this.stats.detailed_report.actions.filter(a => a.type === 'project'),
-        stages: this.stats.detailed_report.actions.filter(a => a.type === 'stage'),
         objects: this.stats.detailed_report.actions.filter(a => a.type === 'object'),
         sections: this.stats.detailed_report.actions.filter(a => a.type === 'section')
       },
@@ -152,7 +144,7 @@ class SyncManager {
         total_created: this.stats.detailed_report.actions.filter(a => a.action === 'created').length,
         total_updated: this.stats.detailed_report.actions.filter(a => a.action === 'updated').length,
         total_errors: this.stats.detailed_report.actions.filter(a => a.action === 'error').length,
-        total_skipped: (this.stats.projects.skipped || 0) + (this.stats.stages.skipped || 0) + 
+        total_skipped: (this.stats.projects.skipped || 0) +
                        (this.stats.objects.skipped || 0) + (this.stats.sections.skipped || 0)
       },
       assignment_summary: {
@@ -292,13 +284,6 @@ class SyncManager {
       `${this.stats.projects.skipped || 0} skipped`
     );
     
-    logger.info('🎯 Stages: ' + 
-      `${this.stats.stages.created} created, ` +
-      `${this.stats.stages.updated} updated, ` +
-      `${this.stats.stages.unchanged} unchanged, ` +
-      `${this.stats.stages.errors} errors, ` +
-      `${this.stats.stages.skipped || 0} skipped`
-    );
     
     logger.info('📦 Objects: ' + 
       `${this.stats.objects.created} created, ` +
@@ -344,7 +329,6 @@ class SyncManager {
   resetStats() {
     this.stats = {
       projects: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
-      stages: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       objects: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       sections: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       assignments: { attempted: 0, successful: 0, failed: 0 },
@@ -366,15 +350,15 @@ class SyncManager {
   
   getSummary() {
     const total = {
-      created: this.stats.projects.created + this.stats.stages.created + 
+      created: this.stats.projects.created +
                 this.stats.objects.created + this.stats.sections.created,
-      updated: this.stats.projects.updated + this.stats.stages.updated + 
+      updated: this.stats.projects.updated +
                this.stats.objects.updated + this.stats.sections.updated,
-      unchanged: this.stats.projects.unchanged + this.stats.stages.unchanged + 
+      unchanged: this.stats.projects.unchanged +
                  this.stats.objects.unchanged + this.stats.sections.unchanged,
-      errors: this.stats.projects.errors + this.stats.stages.errors + 
+      errors: this.stats.projects.errors +
               this.stats.objects.errors + this.stats.sections.errors,
-      skipped: (this.stats.projects.skipped || 0) + (this.stats.stages.skipped || 0) + 
+      skipped: (this.stats.projects.skipped || 0) +
                (this.stats.objects.skipped || 0) + (this.stats.sections.skipped || 0)
     };
     

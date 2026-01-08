@@ -54,64 +54,20 @@ class Validator {
       normalized.external_updated_at = data.external_updated_at || new Date().toISOString();
     }
 
+    // Стадия проекта (опционально)
+    if (data.stage_type !== undefined) {
+      normalized.stage_type = data.stage_type
+        ? this.sanitizeString(data.stage_type, 100)
+        : null;
+    }
+
     // Вычисляем content hash для определения изменений
     if (Object.keys(externalData).length > 0) {
       normalized.content_hash = this.calculateContentHash({
         name: normalized.project_name,
         description: normalized.project_description,
-        manager: normalized.project_manager
-      });
-    }
-
-    return { valid: errors.length === 0, errors, data: normalized };
-  }
-
-  /**
-   * Валидация и нормализация данных стадии
-   */
-  validateStage(data, externalData = {}) {
-    const errors = [];
-    const normalized = {};
-
-    // Обязательные поля
-    if (!data.stage_name || typeof data.stage_name !== 'string') {
-      errors.push('stage_name is required and must be a string');
-    } else {
-      normalized.stage_name = this.sanitizeString(data.stage_name, 255);
-    }
-
-    // Опциональные поля
-    if (data.stage_description !== undefined) {
-      normalized.stage_description = data.stage_description
-        ? this.sanitizeString(data.stage_description, 2000)
-        : null;
-    }
-
-    if (data.stage_project_id !== undefined) {
-      normalized.stage_project_id = data.stage_project_id;
-    }
-
-    if (data.external_id !== undefined) {
-      if (data.external_id === null || data.external_id === '') {
-        errors.push('external_id cannot be empty string');
-      } else {
-        normalized.external_id = String(data.external_id).trim();
-      }
-    }
-
-    if (data.external_source !== undefined) {
-      if (data.external_source === null || data.external_source === '') {
-        errors.push('external_source cannot be empty string');
-      } else {
-        normalized.external_source = this.sanitizeString(data.external_source, 50);
-      }
-    }
-
-    // Вычисляем content hash
-    if (Object.keys(externalData).length > 0) {
-      normalized.content_hash = this.calculateContentHash({
-        name: normalized.stage_name,
-        description: normalized.stage_description
+        manager: normalized.project_manager,
+        stage_type: normalized.stage_type
       });
     }
 
