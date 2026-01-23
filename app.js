@@ -54,6 +54,24 @@ class SyncApp {
         const offset = parseInt(req.query.offset || req.body.offset || '0');
         const limit = parseInt(req.query.limit || req.body.limit || '7');
         const projectId = req.body.project_id || null;
+        const costsMode = req.body.costs_mode || 'skip'; // 'skip' | 'daily' | 'date' | 'full'
+        const costsDate = req.body.costs_date || null; // Для режима 'date'
+
+        // Валидация costsMode
+        if (!['skip', 'daily', 'date', 'full'].includes(costsMode)) {
+          return res.status(400).json({
+            success: false,
+            error: `Invalid costs_mode: ${costsMode}. Must be 'skip', 'daily', 'date', or 'full'.`
+          });
+        }
+
+        // Валидация даты для режима 'date'
+        if (costsMode === 'date' && !costsDate) {
+          return res.status(400).json({
+            success: false,
+            error: `costs_date is required when costs_mode is 'date'.`
+          });
+        }
 
         // Clear old logs before starting
         logger.clearLogs();
@@ -64,7 +82,9 @@ class SyncApp {
           logger.info(`Starting sync with offset: ${offset}, limit: ${limit}`);
         }
 
-        const result = await syncManager.fullSync(offset, limit, true, projectId);
+        logger.info(`Costs mode: ${costsMode}${costsDate ? `, date: ${costsDate}` : ''}`);
+
+        const result = await syncManager.fullSync(offset, limit, true, projectId, costsMode, costsDate);
         
         // Добавляем информацию о пагинации для фронтенда
         result.pagination = {

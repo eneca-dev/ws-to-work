@@ -86,7 +86,31 @@ class SupabaseService {
       throw error;
     }
   }
-  
+
+  async getProjectByExternalId(externalId) {
+    try {
+      const { data, error } = await this.client
+        .from('projects')
+        .select('project_id, project_name, external_id, external_source')
+        .eq('external_id', externalId)
+        .eq('external_source', 'worksection')
+        .single();
+
+      if (error) {
+        if (error.code === 'PGRST116') {
+          // No rows returned
+          return null;
+        }
+        throw error;
+      }
+
+      return data;
+    } catch (error) {
+      logger.error(`Error getting project by external_id: ${error.message}`);
+      throw error;
+    }
+  }
+
   // Objects
   async getObjects() {
     try {
@@ -558,22 +582,368 @@ class SupabaseService {
       const [
         { count: projectsCount },
         { count: objectsCount },
-        { count: sectionsCount }
+        { count: sectionsCount },
+        { count: decompositionStagesCount },
+        { count: decompositionItemsCount }
       ] = await Promise.all([
         this.client.from('projects').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
         this.client.from('objects').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
-        this.client.from('sections').select('*', { count: 'exact', head: true }).not('external_id', 'is', null)
+        this.client.from('sections').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
+        this.client.from('decomposition_stages').select('*', { count: 'exact', head: true }).not('external_id', 'is', null),
+        this.client.from('decomposition_items').select('*', { count: 'exact', head: true }).not('external_id', 'is', null)
       ]);
 
       return {
         projects: projectsCount || 0,
         objects: objectsCount || 0,
         sections: sectionsCount || 0,
-        total: (projectsCount || 0) + (objectsCount || 0) + (sectionsCount || 0)
+        decomposition_stages: decompositionStagesCount || 0,
+        decomposition_items: decompositionItemsCount || 0,
+        total: (projectsCount || 0) + (objectsCount || 0) + (sectionsCount || 0) +
+               (decompositionStagesCount || 0) + (decompositionItemsCount || 0)
       };
     } catch (error) {
       logger.error(`Error counting synced records: ${error.message}`);
-      return { projects: 0, objects: 0, sections: 0, total: 0 };
+      return { projects: 0, objects: 0, sections: 0, decomposition_stages: 0, decomposition_items: 0, total: 0 };
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // DECOMPOSITION STAGES (3rd level nested tasks)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  async getDecompositionStageByExternalId(externalId) {
+    try {
+      const { data, error } = await this.client
+        .from('decomposition_stages')
+        .select('*')
+        .eq('external_id', externalId)
+        .eq('external_source', 'worksection')
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      logger.error(`Error getting decomposition_stage by external_id: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async createDecompositionStage(data) {
+    try {
+      const { data: result, error } = await this.client
+        .from('decomposition_stages')
+        .insert(data)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return result;
+    } catch (error) {
+      logger.error(`Error creating decomposition_stage: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async updateDecompositionStage(stageId, data) {
+    try {
+      const { data: result, error } = await this.client
+        .from('decomposition_stages')
+        .update(data)
+        .eq('decomposition_stage_id', stageId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return result;
+    } catch (error) {
+      logger.error(`Error updating decomposition_stage: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async getSectionByExternalId(externalId, externalSource = 'worksection') {
+    try {
+      const { data, error } = await this.client
+        .from('sections')
+        .select('*')
+        .eq('external_id', externalId)
+        .eq('external_source', externalSource)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      logger.error(`Error getting section by external_id: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // DECOMPOSITION ITEMS
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  async getDecompositionItemByExternalId(externalId) {
+    try {
+      const { data, error } = await this.client
+        .from('decomposition_items')
+        .select('*')
+        .eq('external_id', externalId)
+        .eq('external_source', 'worksection')
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      logger.error(`Error getting decomposition_item by external_id: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async createDecompositionItem(data) {
+    try {
+      const { data: result, error } = await this.client
+        .from('decomposition_items')
+        .insert(data)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return result;
+    } catch (error) {
+      logger.error(`Error creating decomposition_item: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async updateDecompositionItem(itemId, data) {
+    try {
+      const { data: result, error } = await this.client
+        .from('decomposition_items')
+        .update(data)
+        .eq('decomposition_item_id', itemId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return result;
+    } catch (error) {
+      logger.error(`Error updating decomposition_item: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // WORK LOGS
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  async getWorkLogByExternalId(externalId) {
+    try {
+      const { data, error } = await this.client
+        .from('work_logs')
+        .select('*')
+        .eq('external_id', externalId)
+        .eq('external_source', 'worksection')
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      logger.error(`Error getting work_log by external_id: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async createWorkLog(data) {
+    try {
+      const { data: result, error } = await this.client
+        .from('work_logs')
+        .insert(data)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return result;
+    } catch (error) {
+      logger.error(`Error creating work_log: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async getWorkLogsByProject(projectId) {
+    try {
+      const { data, error } = await this.client
+        .from('work_logs')
+        .select(`
+          work_log_id,
+          work_log_date,
+          work_log_hours,
+          work_log_amount,
+          work_log_description,
+          external_id,
+          external_source,
+          decomposition_items!inner (
+            decomposition_item_id,
+            sections!inner (
+              section_id,
+              section_project_id
+            )
+          ),
+          profiles (
+            user_id,
+            email,
+            first_name,
+            last_name
+          )
+        `)
+        .eq('decomposition_items.sections.section_project_id', projectId)
+        .eq('external_source', 'worksection');
+
+      if (error) throw error;
+
+      // Преобразуем результат для удобства
+      return (data || []).map(wl => ({
+        work_log_id: wl.work_log_id,
+        work_log_date: wl.work_log_date,
+        work_log_hours: wl.work_log_hours,
+        work_log_amount: wl.work_log_amount,
+        work_log_description: wl.work_log_description,
+        external_id: wl.external_id,
+        external_source: wl.external_source,
+        user_email: wl.profiles?.email,
+        user_name: `${wl.profiles?.first_name || ''} ${wl.profiles?.last_name || ''}`.trim()
+      }));
+
+    } catch (error) {
+      logger.error(`Error getting work_logs by project: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async getWorkLogsByBudget(budgetId) {
+    try {
+      const { data, error } = await this.client
+        .from('work_logs')
+        .select('work_log_id, work_log_amount')
+        .eq('budget_id', budgetId);
+
+      if (error) throw error;
+
+      return data || [];
+
+    } catch (error) {
+      logger.error(`Error getting work_logs by budget: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // BUDGETS
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  async getBudgetForDecompositionItem(decompositionItemId) {
+    try {
+      const { data, error } = await this.client
+        .from('budgets')
+        .select('*')
+        .eq('entity_type', 'decomposition_item')
+        .eq('entity_id', decompositionItemId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      logger.error(`Error getting budget for decomposition_item: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async updateBudget(budgetId, data) {
+    try {
+      const { data: result, error } = await this.client
+        .from('budgets')
+        .update(data)
+        .eq('budget_id', budgetId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return result;
+    } catch (error) {
+      logger.error(`Error updating budget: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // PROFILES
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  async getProfile(userId) {
+    try {
+      const { data, error } = await this.client
+        .from('profiles')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      logger.error(`Error getting profile: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // HELPER METHODS FOR CONSTANTS
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  async getDifficultyIdByName(name) {
+    try {
+      const { data, error } = await this.client
+        .from('decomposition_difficulty_levels')
+        .select('difficulty_id')
+        .eq('difficulty_abbr', name) // ✅ Используем difficulty_abbr вместо difficulty_name
+        .maybeSingle();
+
+      if (error && error.code !== 'PGRST116') throw error;
+      return data?.difficulty_id || null;
+    } catch (error) {
+      logger.error(`Error getting difficulty ID by name "${name}": ${error.message}`);
+      return null;
+    }
+  }
+
+  async getWorkCategoryIdByName(name) {
+    try {
+      const { data, error } = await this.client
+        .from('work_categories')
+        .select('work_category_id')
+        .eq('work_category_name', name)
+        .maybeSingle();
+
+      if (error && error.code !== 'PGRST116') throw error;
+      return data?.work_category_id || null;
+    } catch (error) {
+      logger.error(`Error getting work category ID by name "${name}": ${error.message}`);
+      return null;
+    }
+  }
+
+  async getStatusIdByName(name) {
+    try {
+      const { data, error } = await this.client
+        .from('section_statuses') // ✅ Используем section_statuses (для decomposition_items)
+        .select('id')
+        .eq('name', name)
+        .maybeSingle();
+
+      if (error && error.code !== 'PGRST116') throw error;
+      return data?.id || null;
+    } catch (error) {
+      logger.error(`Error getting status ID by name "${name}": ${error.message}`);
+      return null;
     }
   }
 }

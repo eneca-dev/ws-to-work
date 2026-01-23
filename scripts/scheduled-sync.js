@@ -33,9 +33,16 @@ async function main() {
   console.log(`✅ Starting scheduled sync at hour ${currentHour}`);
 
   try {
+    // Определяем режим синхронизации отчетов:
+    // - В 09:00 (утром) - синхронизируем отчеты за вчера ('daily')
+    // - В остальное время - без отчетов ('skip')
+    const costsMode = currentHour === 9 ? 'daily' : 'skip';
+
+    console.log(`💰 Costs mode: ${costsMode} ${costsMode === 'daily' ? '(syncing yesterday\'s reports)' : '(skipping reports)'}`);
+
     // Запускаем полную синхронизацию
-    // offset=0, limit=999 (все проекты), sendNotifications=true
-    const result = await syncManager.fullSync(0, 999, true);
+    // offset=0, limit=999 (все проекты), sendNotifications=true, projectId=null, costsMode
+    const result = await syncManager.fullSync(0, 999, true, null, costsMode);
 
     if (result.success) {
       console.log(`✅ Scheduled sync completed successfully`);
@@ -43,6 +50,15 @@ async function main() {
       console.log(`Projects: ${result.stats.projects.created} created, ${result.stats.projects.updated} updated`);
       console.log(`Objects: ${result.stats.objects.created} created, ${result.stats.objects.updated} updated`);
       console.log(`Sections: ${result.stats.sections.created} created, ${result.stats.sections.updated} updated`);
+
+      if (result.stats.work_logs) {
+        console.log(`Work logs: ${result.stats.work_logs.created} created, ${result.stats.work_logs.skipped} skipped`);
+      }
+
+      if (result.stats.orphan_work_logs && result.stats.orphan_work_logs.total > 0) {
+        console.log(`⚠️  Found ${result.stats.orphan_work_logs.total} orphan work_logs`);
+      }
+
       process.exit(0);
     } else {
       console.error(`❌ Scheduled sync failed`);

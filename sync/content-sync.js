@@ -107,10 +107,8 @@ async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
         logger.info(`Found ${taskGroups.length} task groups for project ${project.project_name}`);
 
         for (const taskGroup of taskGroups) {
-          if (taskGroup.status !== 'active') {
-            logger.info(`🚫 Skipping inactive task group: ${taskGroup.name}`);
-            continue;
-          }
+          // Синхронизируем все статусы (active, done, hold, canceled)
+          logger.info(`📦 Processing task group: ${taskGroup.name} (status: ${taskGroup.status})`);
 
           // Проверяем существующий объект для этого проекта
           const existingObject = existingObjects.find(obj =>
@@ -245,12 +243,12 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
         // OS проекты: обрабатываем ВСЕ активные задачи как разделы (не подзадачи)
         logger.info(`📑 OS Project: Processing all tasks as sections for ${project.project_name}`);
         
-        // Фильтруем ВСЕ активные задачи (не только task groups), исключая начинающиеся с "!"
-        const allTasks = wsTasks.filter(task => 
-          task.status === 'active' && !task.name.startsWith('!')
+        // Фильтруем ВСЕ задачи (любых статусов), исключая начинающиеся с "!"
+        const allTasks = wsTasks.filter(task =>
+          !task.name.startsWith('!')
         );
-        
-        logger.info(`Found ${allTasks.length} active tasks for OS project ${project.project_name}`);
+
+        logger.info(`Found ${allTasks.length} tasks for OS project ${project.project_name} (all statuses included)`);
         
         // Находим объект-заглушку для этого проекта
         const placeholderObject = existingObjects.find(obj => 
@@ -393,10 +391,11 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
         const taskGroups = wsTasks.filter(task => 
           task.child && task.child.length > 0 && !task.name.startsWith('!')
         );
-        
+
         for (const taskGroup of taskGroups) {
-        if (taskGroup.status !== 'active') continue;
-        
+        // Синхронизируем все статусы (active, done, hold, canceled)
+        logger.info(`📦 Processing task group: ${taskGroup.name} (status: ${taskGroup.status})`);
+
         // Находим соответствующий объект в БД
         const object = existingObjects.find(obj => 
           obj.external_id && obj.external_id.toString() === taskGroup.id.toString()
@@ -419,8 +418,9 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
         
         // Синхронизируем подзадачи как разделы
         for (const wsSubtask of filteredSubtasks) {
-          if (wsSubtask.status !== 'active') continue;
-          
+          // Синхронизируем все статусы (active, done, hold, canceled)
+          logger.info(`📑 Processing subtask: ${wsSubtask.name} (status: ${wsSubtask.status})`);
+
           // Ищем существующий раздел по ключу (проект + источник + внешний id)
           const existing = existingSections.find(s =>
             s.section_project_id === project.project_id &&

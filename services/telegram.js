@@ -45,34 +45,43 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   csv += '\n';
 
   csv += 'STATISTICS\n';
-  csv += `Projects Created,${stats.projectsCreated}\n`;
-  csv += `Projects Updated,${stats.projectsUpdated}\n`;
-  csv += `Stages Created,${stats.stagesCreated}\n`;
-  csv += `Objects Created,${stats.objectsCreated}\n`;
-  csv += `Objects Updated,${stats.objectsUpdated}\n`;
-  csv += `Sections Created,${stats.sectionsCreated}\n`;
-  csv += `Sections Updated,${stats.sectionsUpdated}\n`;
-  csv += `Total Errors,${stats.errors}\n`;
+  csv += `Projects Created,${stats.projectsCreated || 0}\n`;
+  csv += `Projects Updated,${stats.projectsUpdated || 0}\n`;
+  csv += `Objects Created,${stats.objectsCreated || 0}\n`;
+  csv += `Objects Updated,${stats.objectsUpdated || 0}\n`;
+  csv += `Sections Created,${stats.sectionsCreated || 0}\n`;
+  csv += `Sections Updated,${stats.sectionsUpdated || 0}\n`;
+  csv += `Decomposition Stages Created,${stats.stagesCreated || 0}\n`;
+  csv += `Decomposition Stages Updated,${stats.stagesUpdated || 0}\n`;
+  csv += `Decomposition Items Created,${stats.itemsCreated || 0}\n`;
+  csv += `Decomposition Items Updated,${stats.itemsUpdated || 0}\n`;
+  csv += `Work Logs Created,${stats.workLogsCreated || 0}\n`;
+  csv += `Budgets Updated,${stats.budgetsUpdated || 0}\n`;
+  csv += `Orphan Work Logs,${stats.orphanWorkLogs || 0}\n`;
+  csv += `Total Errors,${stats.errors || 0}\n`;
   csv += '\n';
 
   // Добавляем информацию о дельте, если есть
   if (stats.delta) {
     csv += 'DELTA (Added by Sync)\n';
     csv += `Projects Added,${stats.delta.projects}\n`;
-    csv += `Stages Added,${stats.delta.stages}\n`;
     csv += `Objects Added,${stats.delta.objects}\n`;
     csv += `Sections Added,${stats.delta.sections}\n`;
+    csv += `Decomposition Stages Added,${stats.delta.decomposition_stages}\n`;
+    csv += `Decomposition Items Added,${stats.delta.decomposition_items}\n`;
     csv += `Total Added,${stats.delta.total}\n`;
     csv += '\n';
     csv += 'COUNT BEFORE/AFTER\n';
     csv += `Projects Before,${stats.countBefore.projects}\n`;
     csv += `Projects After,${stats.countAfter.projects}\n`;
-    csv += `Stages Before,${stats.countBefore.stages}\n`;
-    csv += `Stages After,${stats.countAfter.stages}\n`;
     csv += `Objects Before,${stats.countBefore.objects}\n`;
     csv += `Objects After,${stats.countAfter.objects}\n`;
     csv += `Sections Before,${stats.countBefore.sections}\n`;
     csv += `Sections After,${stats.countAfter.sections}\n`;
+    csv += `Decomposition Stages Before,${stats.countBefore.decomposition_stages}\n`;
+    csv += `Decomposition Stages After,${stats.countAfter.decomposition_stages}\n`;
+    csv += `Decomposition Items Before,${stats.countBefore.decomposition_items}\n`;
+    csv += `Decomposition Items After,${stats.countAfter.decomposition_items}\n`;
     csv += `Total Before,${stats.countBefore.total}\n`;
     csv += `Total After,${stats.countAfter.total}\n`;
     csv += '\n';
@@ -123,9 +132,10 @@ async function sendSyncStarted(totalProjects, countBefore) {
     `📊 Проектов в Worksection: ${totalProjects}\n` +
     `📊 Текущее состояние базы:\n` +
     `   📋 Проекты: ${countBefore.projects}\n` +
-    `   🎯 Стадии: ${countBefore.stages}\n` +
     `   📦 Объекты: ${countBefore.objects}\n` +
     `   📑 Разделы: ${countBefore.sections}\n` +
+    `   🔹 Этапы декомпозиции: ${countBefore.decomposition_stages}\n` +
+    `   🔸 Задачи декомпозиции: ${countBefore.decomposition_items}\n` +
     `   🔢 Всего: ${countBefore.total} записей`;
 
   await sendMessage(message);
@@ -168,9 +178,10 @@ async function sendCsvFile(logs, stats, startTime, endTime) {
     if (stats.delta) {
       caption += `\n\n📈 Добавлено синхронизацией:\n` +
         `📋 Проекты: ${stats.delta.projects}\n` +
-        `🎯 Стадии: ${stats.delta.stages}\n` +
         `📦 Объекты: ${stats.delta.objects}\n` +
         `📑 Разделы: ${stats.delta.sections}\n` +
+        `🔹 Этапы декомпозиции: ${stats.delta.decomposition_stages}\n` +
+        `🔸 Задачи декомпозиции: ${stats.delta.decomposition_items}\n` +
         `🔢 Всего: ${stats.delta.total} записей`;
     }
 
