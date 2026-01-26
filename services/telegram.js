@@ -127,26 +127,51 @@ function generateCsvContent(logs, stats, startTime, endTime) {
 }
 
 /**
- * Отправляет текстовое сообщение в Telegram
+ * Возвращает массив chat IDs для отправки сообщений
+ */
+function getChatIds() {
+  const ids = [config.telegram.chatId];
+  if (config.telegram.chatId2) {
+    ids.push(config.telegram.chatId2);
+  }
+  return ids;
+}
+
+/**
+ * Отправляет текстовое сообщение в конкретный Telegram чат
+ */
+async function sendMessageToChat(text, chatId) {
+  const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
+  await axios.post(url, {
+    chat_id: chatId,
+    text: text,
+    parse_mode: 'HTML'
+  }, {
+    timeout: 10000
+  });
+}
+
+/**
+ * Отправляет текстовое сообщение во все настроенные Telegram чаты
  */
 async function sendMessage(text) {
   if (!config.telegram.enabled) {
     return;
   }
 
-  try {
-    const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendMessage`;
-    await axios.post(url, {
-      chat_id: config.telegram.chatId,
-      text: text,
-      parse_mode: 'HTML'
-    }, {
-      timeout: 10000
-    });
-  } catch (error) {
-    // Ошибки Telegram не ломают основной процесс
-    logger.warning(`⚠️ Не удалось отправить сообщение в Telegram: ${error.message}`);
-  }
+  const chatIds = getChatIds();
+  const results = await Promise.allSettled(
+    chatIds.map(chatId => sendMessageToChat(text, chatId))
+  );
+
+  // Логируем результаты для каждого чата
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      logger.warning(`⚠️ Не удалось отправить сообщение в Telegram чат ${chatIds[index]}: ${result.reason.message}`);
+    } else {
+      logger.info(`✅ Сообщение отправлено в Telegram чат ${chatIds[index]}`);
+    }
+  });
 }
 
 /**
@@ -181,7 +206,26 @@ async function sendError(error, context = '') {
 }
 
 /**
- * Отправляет CSV файл в Telegram
+ * Отправляет CSV файл в конкретный Telegram чат
+ */
+async function sendCsvFileToChat(csvContent, filename, caption, chatId) {
+  const formData = new FormData();
+  formData.append('chat_id', chatId);
+  formData.append('document', Buffer.from(csvContent, 'utf-8'), {
+    filename: filename,
+    contentType: 'text/csv'
+  });
+  formData.append('caption', caption);
+
+  const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendDocument`;
+  await axios.post(url, formData, {
+    headers: formData.getHeaders(),
+    timeout: 10000
+  });
+}
+
+/**
+ * Отправляет CSV файл во все настроенные Telegram чаты
  */
 async function sendCsvFile(logs, stats, startTime, endTime) {
   // Проверяем, включены ли уведомления
@@ -211,26 +255,23 @@ async function sendCsvFile(logs, stats, startTime, endTime) {
         `🔢 Всего: ${stats.delta.total} записей`;
     }
 
-    // Создаем FormData для отправки файла
-    const formData = new FormData();
-    formData.append('chat_id', config.telegram.chatId);
-    formData.append('document', Buffer.from(csvContent, 'utf-8'), {
-      filename: filename,
-      contentType: 'text/csv'
-    });
-    formData.append('caption', caption);
+    // Отправляем в все чаты
+    const chatIds = getChatIds();
+    const results = await Promise.allSettled(
+      chatIds.map(chatId => sendCsvFileToChat(csvContent, filename, caption, chatId))
+    );
 
-    // Отправляем файл через Telegram Bot API
-    const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendDocument`;
-    await axios.post(url, formData, {
-      headers: formData.getHeaders(),
-      timeout: 10000 // 10 секунд таймаут
+    // Логируем результаты для каждого чата
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        logger.warning(`⚠️ Не удалось отправить CSV в Telegram чат ${chatIds[index]}: ${result.reason.message}`);
+      } else {
+        logger.info(`✅ CSV отправлен в Telegram чат ${chatIds[index]}`);
+      }
     });
-
-    logger.info('✅ Логи отправлены в Telegram');
   } catch (error) {
     // Ошибка отправки в Telegram не должна ломать основной процесс
-    logger.warning(`⚠️ Не удалось отправить логи в Telegram: ${error.message}`);
+    logger.warning(`⚠️ Ошибка при отправке логов в Telegram: ${error.message}`);
   }
 }
 
