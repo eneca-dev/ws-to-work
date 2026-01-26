@@ -47,13 +47,16 @@ async function syncCosts(stats, offset = 0, limit = 7, projectId = null, costsMo
       stats.work_logs = { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 };
     }
     if (!stats.budgets) {
-      stats.budgets = { updated: 0, errors: 0 };
+      stats.budgets = { updated: 0, errors: 0, total_increase: 0 };
     }
     if (!stats.orphan_work_logs) {
       stats.orphan_work_logs = { total: 0, details: [] };
     }
     if (!stats.decomposition_items) {
       stats.decomposition_items = { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 };
+    }
+    if (!stats.failed_work_logs) {
+      stats.failed_work_logs = { total: 0, details: [] };
     }
 
     // Режим 'skip' - пропускаем синхронизацию отчетов
@@ -262,7 +265,7 @@ async function findOrCreateDecompositionItem(cost, stats) {
   const itemData = {
     decomposition_item_section_id: stage.decomposition_stage_section_id,
     decomposition_item_stage_id: stage.decomposition_stage_id,
-    decomposition_item_description: cost.task.name || 'Unnamed task',
+    decomposition_item_description: (cost.task.name || 'Unnamed task') + ' - задача',
     decomposition_item_work_category_id: categoryId,
     decomposition_item_status_id: statusId,
     decomposition_item_difficulty_id: difficultyId,
@@ -276,7 +279,7 @@ async function findOrCreateDecompositionItem(cost, stats) {
   item = await supabase.createDecompositionItem(itemData);
   stats.decomposition_items.created++;
 
-  logger.success(`✅ Created decomposition_item for cost: ${cost.task.name}`);
+  logger.success(`✅ Created decomposition_item for cost: ${cost.task.name} - задача`);
 
   return item;
 }
@@ -307,6 +310,20 @@ async function syncSingleCost(cost, stats) {
     if (!item) {
       logger.warning(`⚠️ Failed to find or create decomposition_item, skipping cost ${externalId}`);
       stats.work_logs.skipped++;
+      stats.failed_work_logs.total++;
+      stats.failed_work_logs.details.push({
+        cost_id: externalId,
+        user_email: cost.user_from?.email || 'N/A',
+        user_name: cost.user_from?.name || 'N/A',
+        date: cost.date,
+        hours: parseTimeToHours(cost.time),
+        amount: parseFloat(cost.money) || 0,
+        task_id: cost.task?.id || 'N/A',
+        task_name: cost.task?.name || 'N/A',
+        parent_task: cost.task?.parent?.name || 'N/A',
+        project_name: cost.task?.project?.name || 'N/A',
+        reason: 'Decomposition stage not found (task not synced)'
+      });
       return;
     }
 
@@ -317,6 +334,20 @@ async function syncSingleCost(cost, stats) {
     if (!userEmail) {
       logger.warning(`⚠️ No user email in cost ${externalId}, skipping`);
       stats.work_logs.skipped++;
+      stats.failed_work_logs.total++;
+      stats.failed_work_logs.details.push({
+        cost_id: externalId,
+        user_email: 'N/A',
+        user_name: cost.user_from?.name || 'N/A',
+        date: cost.date,
+        hours: parseTimeToHours(cost.time),
+        amount: parseFloat(cost.money) || 0,
+        task_id: cost.task?.id || 'N/A',
+        task_name: cost.task?.name || 'N/A',
+        parent_task: cost.task?.parent?.name || 'N/A',
+        project_name: cost.task?.project?.name || 'N/A',
+        reason: 'No user email in cost'
+      });
       return;
     }
 
@@ -324,14 +355,32 @@ async function syncSingleCost(cost, stats) {
     if (!user) {
       logger.warning(`⚠️ User not found: ${userEmail}, skipping cost ${externalId}`);
       stats.work_logs.skipped++;
+      stats.failed_work_logs.total++;
+      stats.failed_work_logs.details.push({
+        cost_id: externalId,
+        user_email: userEmail,
+        user_name: cost.user_from?.name || 'N/A',
+        date: cost.date,
+        hours: parseTimeToHours(cost.time),
+        amount: parseFloat(cost.money) || 0,
+        task_id: cost.task?.id || 'N/A',
+        task_name: cost.task?.name || 'N/A',
+        parent_task: cost.task?.parent?.name || 'N/A',
+        project_name: cost.task?.project?.name || 'N/A',
+        reason: `User not found in Supabase: ${userEmail}`
+      });
       return;
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 4. Получить hourly_rate пользователя
+    // 4. Получить сумму и историческую ставку из Worksection cost
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const profile = await supabase.getProfile(user.user_id);
-    const hourlyRate = profile?.salary || 0;
+    // Worksection хранит УЖЕ вычисленную сумму с исторической ставкой в поле "money"
+    const hours = parseTimeToHours(cost.time);
+    const costAmount = parseFloat(cost.money) || 0;
+
+    // Вычисляем историческую ставку (на момент создания отчета в WS)
+    const hourlyRate = hours > 0 ? costAmount / hours : 0;
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // 5. Получить budget_id
@@ -344,14 +393,7 @@ async function syncSingleCost(cost, stats) {
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 6. Конвертировать time (HH:MM) в часы и вычислить сумму
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const hours = parseTimeToHours(cost.time);
-    // Вычисляем сумму как hours * hourlyRate (так же как в базе данных)
-    const newAmount = hours * hourlyRate;
-
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 7. Проверить и обновить бюджет если нужно
+    // 6. Проверить и обновить бюджет если нужно
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const currentBudget = parseFloat(budget.total_amount);
 
@@ -362,7 +404,7 @@ async function syncSingleCost(cost, stats) {
     const spentAmount = existingWorkLogs.reduce((sum, log) => sum + parseFloat(log.work_log_amount || 0), 0);
 
     // Считаем требуемую сумму (потрачено + новый отчет)
-    const requiredAmount = spentAmount + newAmount;
+    const requiredAmount = spentAmount + costAmount;
 
     // Если требуемая сумма больше текущего бюджета - увеличиваем бюджет
     if (requiredAmount > currentBudget) {
@@ -373,17 +415,18 @@ async function syncSingleCost(cost, stats) {
 
       logger.info(`💵 Budget increased for task ${cost.task.id}: ${currentBudget} → ${requiredAmount} (added ${deficit.toFixed(2)} for new work_log)`);
       stats.budgets.updated++;
+      stats.budgets.total_increase += deficit;
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 8. Создать work_log
+    // 7. Создать work_log с исторической ставкой
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const workLogData = {
       decomposition_item_id: item.decomposition_item_id,
       work_log_created_by: user.user_id,
       work_log_date: cost.date,
       work_log_hours: hours,
-      work_log_hourly_rate: hourlyRate,
+      work_log_hourly_rate: hourlyRate, // Историческая ставка (вычислена из cost.money)
       // work_log_amount НЕ передаем - вычисляется автоматически в БД как hours * hourlyRate
       work_log_description: cost.comment || 'Imported from Worksection',
       budget_id: budget.budget_id,
@@ -394,7 +437,10 @@ async function syncSingleCost(cost, stats) {
     await supabase.createWorkLog(workLogData);
     stats.work_logs.created++;
 
-    logger.success(`✅ Created work_log for cost ${externalId}: ${cost.comment || 'No comment'} (${hours}h × ${hourlyRate}/h = ${newAmount.toFixed(2)})`);
+    logger.success(`✅ Created work_log for cost ${externalId}: ${cost.comment || 'No comment'} (${hours}h × ${hourlyRate.toFixed(2)}/h = ${costAmount.toFixed(2)})`);
+
+    // Звуковое уведомление об успешном создании (ASCII bell)
+    process.stdout.write('\u0007');
 
     // Добавляем в детальный отчет
     if (stats.detailed_report) {
@@ -406,7 +452,7 @@ async function syncSingleCost(cost, stats) {
         user: userEmail,
         hours: hours,
         hourly_rate: hourlyRate,
-        amount: newAmount,
+        amount: costAmount,
         description: cost.comment
       });
     }
@@ -414,6 +460,9 @@ async function syncSingleCost(cost, stats) {
   } catch (error) {
     logger.error(`❌ Error syncing cost ${cost.id}: ${error.message}`);
     stats.work_logs.errors++;
+
+    // Звуковое уведомление об ошибке (3 beep)
+    process.stdout.write('\u0007\u0007\u0007');
 
     if (stats.detailed_report) {
       stats.detailed_report.actions.push({

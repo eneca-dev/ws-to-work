@@ -56,7 +56,9 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   csv += `Decomposition Items Created,${stats.itemsCreated || 0}\n`;
   csv += `Decomposition Items Updated,${stats.itemsUpdated || 0}\n`;
   csv += `Work Logs Created,${stats.workLogsCreated || 0}\n`;
+  csv += `Work Logs Skipped,${stats.workLogsSkipped || 0}\n`;
   csv += `Budgets Updated,${stats.budgetsUpdated || 0}\n`;
+  csv += `Budget Total Increase,${stats.budgetTotalIncrease ? stats.budgetTotalIncrease.toFixed(2) : '0.00'}\n`;
   csv += `Orphan Work Logs,${stats.orphanWorkLogs || 0}\n`;
   csv += `Total Errors,${stats.errors || 0}\n`;
   csv += '\n';
@@ -84,6 +86,30 @@ function generateCsvContent(logs, stats, startTime, endTime) {
     csv += `Decomposition Items After,${stats.countAfter.decomposition_items}\n`;
     csv += `Total Before,${stats.countBefore.total}\n`;
     csv += `Total After,${stats.countAfter.total}\n`;
+    csv += '\n';
+  }
+
+  // Добавляем детальную таблицу пропущенных отчетов, если есть
+  if (stats.failedWorkLogs && stats.failedWorkLogs.length > 0) {
+    csv += 'FAILED WORK LOGS DETAILS\n';
+    csv += 'Cost ID,User Email,User Name,Date,Hours,Amount,Task ID,Task Name,Parent Task,Project,Reason\n';
+
+    stats.failedWorkLogs.forEach(failed => {
+      const costId = failed.cost_id || 'N/A';
+      const userEmail = (failed.user_email || 'N/A').replace(/"/g, '""');
+      const userName = (failed.user_name || 'N/A').replace(/"/g, '""');
+      const date = failed.date || 'N/A';
+      const hours = failed.hours || 0;
+      const amount = failed.amount ? failed.amount.toFixed(2) : '0.00';
+      const taskId = failed.task_id || 'N/A';
+      const taskName = (failed.task_name || 'N/A').replace(/"/g, '""');
+      const parentTask = (failed.parent_task || 'N/A').replace(/"/g, '""');
+      const project = (failed.project_name || 'N/A').replace(/"/g, '""');
+      const reason = (failed.reason || 'Unknown').replace(/"/g, '""');
+
+      csv += `${costId},"${userEmail}","${userName}",${date},${hours},${amount},${taskId},"${taskName}","${parentTask}","${project}","${reason}"\n`;
+    });
+
     csv += '\n';
   }
 

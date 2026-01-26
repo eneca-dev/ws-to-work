@@ -16,8 +16,9 @@ class SyncManager {
       decomposition_stages: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       decomposition_items: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       work_logs: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
-      budgets: { updated: 0, errors: 0 },
+      budgets: { updated: 0, errors: 0, total_increase: 0 },
       orphan_work_logs: { total: 0, details: [] },
+      failed_work_logs: { total: 0, details: [] },
       assignments: { attempted: 0, successful: 0, failed: 0 },
       user_search: {
         total_searches: 0,
@@ -127,8 +128,11 @@ class SyncManager {
         itemsCreated: this.stats.decomposition_items.created,
         itemsUpdated: this.stats.decomposition_items.updated,
         workLogsCreated: this.stats.work_logs.created,
+        workLogsSkipped: this.stats.work_logs.skipped,
         budgetsUpdated: this.stats.budgets.updated,
+        budgetTotalIncrease: this.stats.budgets.total_increase,
         orphanWorkLogs: this.stats.orphan_work_logs.total,
+        failedWorkLogs: this.stats.failed_work_logs.details,
         errors: this.stats.projects.errors + this.stats.objects.errors + this.stats.sections.errors +
                 this.stats.decomposition_stages.errors + this.stats.decomposition_items.errors +
                 this.stats.work_logs.errors + this.stats.budgets.errors,
@@ -394,8 +398,9 @@ class SyncManager {
       decomposition_stages: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       decomposition_items: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       work_logs: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
-      budgets: { updated: 0, errors: 0 },
+      budgets: { updated: 0, errors: 0, total_increase: 0 },
       orphan_work_logs: { total: 0, details: [] },
+      failed_work_logs: { total: 0, details: [] },
       assignments: { attempted: 0, successful: 0, failed: 0 },
       user_search: {
         total_searches: 0,
