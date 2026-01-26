@@ -27,10 +27,62 @@
             border-radius: 6px;
             cursor: pointer;
             font-size: 16px;
-            margin-bottom: 20px;
         }
         .sync-button:hover { background: #0056b3; }
         .sync-button:disabled { background: #ccc; cursor: not-allowed; }
+        .sync-button.secondary {
+            background: #6c757d;
+        }
+        .sync-button.secondary:hover { background: #545b62; }
+        .sync-controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+        .project-input {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .project-input input {
+            padding: 12px 16px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            width: 150px;
+        }
+        .project-input input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+        .project-input input::placeholder {
+            color: #999;
+        }
+        .costs-mode-selector {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .costs-mode-selector label {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+        }
+        .costs-mode-selector select {
+            padding: 12px 16px;
+            border: 2px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+            background: white;
+            cursor: pointer;
+            min-width: 160px;
+        }
+        .costs-mode-selector select:focus {
+            outline: none;
+            border-color: #007bff;
+        }
         .status { 
             padding: 10px;
             border-radius: 4px;
@@ -86,7 +138,26 @@
             <p>Simplified synchronization tool</p>
         </div>
         
-        <button class="sync-button" onclick="startSync()">Start Full Sync</button>
+        <div class="sync-controls">
+            <button class="sync-button" id="fullSyncBtn" onclick="startSync()">Full Sync</button>
+            <div class="project-input">
+                <input type="text" id="projectId" placeholder="Project ID" onkeypress="if(event.key==='Enter')startProjectSync()" />
+                <button class="sync-button secondary" id="projectSyncBtn" onclick="startProjectSync()">Sync Project</button>
+            </div>
+            <div class="costs-mode-selector">
+                <label for="costsMode">Режим отчетов:</label>
+                <select id="costsMode" onchange="toggleDatePicker()">
+                    <option value="skip" selected>Без отчетов</option>
+                    <option value="daily">За вчера</option>
+                    <option value="date">За конкретную дату</option>
+                    <option value="full">Все отчеты</option>
+                </select>
+            </div>
+            <div class="costs-mode-selector" id="datePicker" style="display: none;">
+                <label for="costsDate">Дата:</label>
+                <input type="date" id="costsDate" />
+            </div>
+        </div>
         
         <div id="status"></div>
         
@@ -116,7 +187,22 @@
     
     <script>
         let isRunning = false;
-        
+
+        function toggleDatePicker() {
+            const costsMode = document.getElementById('costsMode').value;
+            const datePicker = document.getElementById('datePicker');
+
+            if (costsMode === 'date') {
+                datePicker.style.display = 'flex';
+                // Устанавливаем вчерашнюю дату по умолчанию
+                const yesterday = new Date();
+                yesterday.setDate(yesterday.getDate() - 1);
+                document.getElementById('costsDate').value = yesterday.toISOString().split('T')[0];
+            } else {
+                datePicker.style.display = 'none';
+            }
+        }
+
         function addLog(message, level = 'info') {
             const logs = document.getElementById('logs');
             const entry = document.createElement('div');
@@ -145,62 +231,117 @@
             document.getElementById('errors').textContent = total.errors || 0;
         }
         
-        async function startSync() {
+        function setButtonsDisabled(disabled) {
+            document.getElementById('fullSyncBtn').disabled = disabled;
+            document.getElementById('projectSyncBtn').disabled = disabled;
+            document.getElementById('projectId').disabled = disabled;
+            document.getElementById('costsMode').disabled = disabled;
+        }
+
+        async function startSync(projectId = null) {
             if (isRunning) return;
-            
+
             isRunning = true;
-            const button = document.querySelector('.sync-button');
-            button.disabled = true;
-            button.textContent = 'Syncing...';
-            
+            setButtonsDisabled(true);
+
+            const fullBtn = document.getElementById('fullSyncBtn');
+            const projectBtn = document.getElementById('projectSyncBtn');
+
+            if (projectId) {
+                projectBtn.textContent = 'Syncing...';
+            } else {
+                fullBtn.textContent = 'Syncing...';
+            }
+
             // Clear logs
             document.getElementById('logs').innerHTML = '';
-            
-            updateStatus('Starting synchronization...', 'info');
-            addLog('🚀 Starting full synchronization...');
-            
+
+            const logMessage = projectId
+                ? `🎯 Starting sync for project ${projectId}...`
+                : '🚀 Starting full synchronization...';
+
+            updateStatus(projectId ? `Syncing project ${projectId}...` : 'Starting synchronization...', 'info');
+            addLog(logMessage);
+
             try {
+                const body = projectId ? { project_id: projectId } : {};
+
+                // Добавляем режим синхронизации отчетов
+                const costsMode = document.getElementById('costsMode').value;
+                body.costs_mode = costsMode;
+
+                // Если выбран режим "date", добавляем дату
+                if (costsMode === 'date') {
+                    const costsDate = document.getElementById('costsDate').value;
+                    if (!costsDate) {
+                        updateStatus('Выберите дату для синхронизации отчетов', 'error');
+                        return;
+                    }
+                    body.costs_date = costsDate;
+                }
+
+                // Логируем режим
+                const modeLabels = {
+                    'skip': 'Без отчетов',
+                    'daily': 'За вчера',
+                    'date': 'За ' + (body.costs_date || ''),
+                    'full': 'Все отчеты'
+                };
+                addLog(`💰 Режим отчетов: ${modeLabels[costsMode]}`);
+
                 const response = await fetch('/api/sync', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
-                    }
+                    },
+                    body: JSON.stringify(body)
                 });
-                
+
                 const result = await response.json();
-                
+
                 if (result.success) {
                     updateStatus(`Sync completed successfully in ${result.duration}ms`, 'success');
                     updateStats(result.summary);
-                    
+
                     // Show detailed logs
                     if (result.logs) {
                         result.logs.forEach(log => {
                             let level = 'info';
                             if (log.level) level = log.level;
-                            else if (log.includes('❌')) level = 'error';
-                            else if (log.includes('✅')) level = 'success';
-                            else if (log.includes('⚠️')) level = 'warning';
-                            
+                            else if (log.includes && log.includes('❌')) level = 'error';
+                            else if (log.includes && log.includes('✅')) level = 'success';
+                            else if (log.includes && log.includes('⚠️')) level = 'warning';
+
                             addLog(log.message || log, level);
                         });
                     }
-                    
+
                     addLog(`✅ Synchronization completed successfully!`, 'success');
-                    
+
                 } else {
                     updateStatus(`Sync failed: ${result.error}`, 'error');
                     addLog(`❌ Sync failed: ${result.error}`, 'error');
                 }
-                
+
             } catch (error) {
                 updateStatus(`Sync failed: ${error.message}`, 'error');
                 addLog(`❌ Sync failed: ${error.message}`, 'error');
             } finally {
                 isRunning = false;
-                button.disabled = false;
-                button.textContent = 'Start Full Sync';
+                setButtonsDisabled(false);
+                fullBtn.textContent = 'Full Sync';
+                projectBtn.textContent = 'Sync Project';
             }
+        }
+
+        function startProjectSync() {
+            const projectId = document.getElementById('projectId').value.trim();
+            if (!projectId) {
+                updateStatus('Please enter a Project ID', 'error');
+                document.getElementById('projectId').focus();
+                return;
+            }
+            startSync(projectId);
         }
         
         // Auto-refresh logs every 2 seconds during sync

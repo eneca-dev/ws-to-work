@@ -177,6 +177,27 @@ class WorksectionService {
     const data = await this.request('get_users');
     return data.data || [];
   }
+
+  /**
+   * Получить отчеты (costs) из Worksection
+   * @param {string} projectId - ID проекта (опционально)
+   * @param {string} taskId - ID задачи (опционально)
+   * @returns {Promise<Array>} Массив отчетов
+   */
+  async getCosts(projectId = null, taskId = null) {
+    const params = {};
+
+    if (projectId) {
+      params.id_project = projectId;
+    }
+
+    if (taskId) {
+      params.id_task = taskId;
+    }
+
+    const data = await this.request('get_costs', params);
+    return data.data || [];
+  }
 }
 
 module.exports = new WorksectionService(); 

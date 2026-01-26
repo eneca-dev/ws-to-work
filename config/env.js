@@ -26,6 +26,7 @@ const config = {
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN,
     chatId: process.env.TELEGRAM_CHAT_ID,
+    chatId2: process.env.TELEGRAM_CHAT_ID_2 || null,
     enabled: !!(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID),
   }
 };
