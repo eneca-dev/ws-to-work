@@ -6,6 +6,7 @@ const { syncCosts } = require('./costs-sync');
 const telegram = require('../services/telegram');
 const supabaseService = require('../services/supabase');
 const worksectionService = require('../services/worksection');
+const userCache = require('../services/user-cache');
 
 class SyncManager {
   constructor() {
@@ -61,9 +62,14 @@ class SyncManager {
     }
 
     try {
+      // ✨ Инициализируем кэш пользователей перед синхронизацией
+      if (offset === 0) {  // Только при первом вызове
+        await userCache.initialize();
+      }
+
       // Clear previous stats
       this.resetStats();
-      
+
       // Step 1: Sync projects (включая stage_type из тегов)
       logger.info('📋 Step 1/5: Syncing projects');
       await syncProjects(this.stats, offset, limit, projectId);
@@ -143,6 +149,11 @@ class SyncManager {
       };
       await telegram.sendCsvFile(logger.getLogs(), telegramStats, new Date(startTime), endTime);
 
+      // ✨ Очищаем кэш после синхронизации
+      if (!projectId) {  // Только при полной синхронизации
+        userCache.clear();
+      }
+
       return {
         success: true,
         duration,
@@ -151,8 +162,11 @@ class SyncManager {
         detailed_report: detailedReport,
         user_search_summary: this.generateUserSearchSummary()
       };
-      
+
     } catch (error) {
+      // ✨ Очищаем кэш при ошибке
+      userCache.clear();
+
       logger.error(`❌ Full synchronization failed: ${error.message}`);
 
       // Отправляем уведомление об ошибке в Telegram

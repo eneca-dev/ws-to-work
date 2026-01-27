@@ -1,6 +1,7 @@
 const worksection = require('../services/worksection');
 const supabase = require('../services/supabase');
 const logger = require('../utils/logger');
+const userCache = require('../services/user-cache');
 
 async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
   try {
@@ -551,7 +552,7 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
 
 async function findUserByEmail(email, stats) {
   if (!email) return null;
-  
+
   try {
     // Инициализируем статистику поиска пользователей если её нет
     if (!stats.user_search) {
@@ -568,23 +569,25 @@ async function findUserByEmail(email, stats) {
         searches: []
       };
     }
-    
+
     stats.assignments.attempted++;
-    
-    // Используем новую улучшенную функцию поиска
-    const user = await supabase.findUser(email, stats);
+
+    // ✨ ИСПОЛЬЗУЕМ КЭШ вместо БД
+    const user = userCache.findUser(email, stats);
+
     if (user) {
       stats.assignments.successful++;
       logger.info(`👤 Found user: ${user.first_name} ${user.last_name} (${email})`);
       return user;
     }
-    
+
     stats.assignments.failed++;
     logger.warning(`👤 User not found: ${email}`);
     return null;
-    
+
   } catch (error) {
     stats.assignments.failed++;
+    stats.user_search.errors++;
     logger.error(`👤 Error finding user ${email}: ${error.message}`);
     return null;
   }
