@@ -1,6 +1,7 @@
 const worksection = require('../services/worksection');
 const supabase = require('../services/supabase');
 const logger = require('../utils/logger');
+const userCache = require('../services/user-cache');
 
 // Извлекает стадию из тегов проекта Worksection
 function extractStageFromTags(wsProject) {
@@ -184,21 +185,22 @@ async function findUserByEmail(email, stats) {
     }
     
     stats.assignments.attempted++;
-    
-    // Используем новую улучшенную функцию поиска
-    const user = await supabase.findUser(email, stats);
+
+    // ✨ ИСПОЛЬЗУЕМ КЭШ вместо БД
+    const user = userCache.findUser(email, stats);
     if (user) {
       stats.assignments.successful++;
       logger.info(`👤 Found user: ${user.first_name} ${user.last_name} (${email})`);
       return user;
     }
-    
+
     stats.assignments.failed++;
     logger.warning(`👤 User not found: ${email}`);
     return null;
-    
+
   } catch (error) {
     stats.assignments.failed++;
+    stats.user_search.errors++;
     logger.error(`👤 Error finding user ${email}: ${error.message}`);
     return null;
   }

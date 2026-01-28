@@ -1,6 +1,7 @@
 const worksection = require('../services/worksection');
 const supabase = require('../services/supabase');
 const logger = require('../utils/logger');
+const userCache = require('../services/user-cache');
 
 // Кеш для константных ID (category, status, difficulty)
 let cachedCategoryId = null;
@@ -258,7 +259,7 @@ async function syncSingleDecompositionItem(wsNestedTask, stage, section, stats) 
     // Ищем ответственного
     let responsibleId = null;
     if (wsNestedTask.user_to?.email) {
-      const user = await supabase.findUser(wsNestedTask.user_to.email, stats);
+      const user = userCache.findUser(wsNestedTask.user_to.email, stats);
       if (user) responsibleId = user.user_id;
     }
 
