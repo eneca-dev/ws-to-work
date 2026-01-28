@@ -5,6 +5,7 @@ const { config, validateConfig } = require('./config/env');
 const syncManager = require('./sync/sync-manager');
 const logger = require('./utils/logger');
 const telegramBot = require('./services/telegram-bot');
+const scheduler = require('./services/scheduler');
 
 class SyncApp {
   constructor() {
@@ -162,6 +163,14 @@ class SyncApp {
         }
       });
     });
+
+    // Schedule info
+    this.app.get('/api/schedule', (req, res) => {
+      res.json({
+        success: true,
+        schedule: scheduler.getScheduleInfo()
+      });
+    });
     
     // Root endpoint
     this.app.get('/', (req, res) => {
@@ -216,6 +225,9 @@ class SyncApp {
             }
           }
         }
+
+        // ✨ Инициализация планировщика автоматической синхронизации
+        scheduler.initScheduler();
       });
 
     } catch (error) {

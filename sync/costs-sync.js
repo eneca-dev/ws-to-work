@@ -1,6 +1,7 @@
 const worksection = require('../services/worksection');
 const supabase = require('../services/supabase');
 const logger = require('../utils/logger');
+const userCache = require('../services/user-cache');
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // КЕШ для часто используемых ID (загружается один раз при первой синхронизации)
@@ -255,7 +256,7 @@ async function findOrCreateDecompositionItem(cost, stats) {
   // 4. Находим ответственного (если есть в cost)
   let responsibleId = null;
   if (cost.user_from?.email) {
-    const user = await supabase.findUser(cost.user_from.email, stats);
+    const user = userCache.findUser(cost.user_from.email, stats);
     if (user) {
       responsibleId = user.user_id;
     }
