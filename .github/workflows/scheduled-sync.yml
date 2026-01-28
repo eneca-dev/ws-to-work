@@ -1,0 +1,56 @@
+name: Scheduled Sync
+
+on:
+  # Запуск по расписанию каждые 3 часа
+  schedule:
+    - cron: '0 0,3,6,9,12,15,18,21 * * *'  # В 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 UTC
+
+  # Также разрешаем ручной запуск из интерфейса GitHub
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Sync
+        run: |
+          echo "🚀 Запуск синхронизации в $(date)"
+
+          # Определяем режим синхронизации отчетов (daily в 9:00 UTC)
+          HOUR=$(date -u +%H)
+          if [ "$HOUR" = "09" ]; then
+            COSTS_MODE="daily"
+          else
+            COSTS_MODE="skip"
+          fi
+
+          echo "💰 Costs mode: $COSTS_MODE"
+
+          # Отправляем POST запрос к вашему API
+          response=$(curl -X POST "${{ secrets.APP_URL }}/api/sync" \
+            -H "Content-Type: application/json" \
+            -d "{\"offset\": 0, \"limit\": 999, \"costs_mode\": \"$COSTS_MODE\"}" \
+            -w "\n%{http_code}" \
+            -s)
+
+          # Получаем HTTP код ответа
+          http_code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+
+          echo "📊 HTTP код: $http_code"
+
+          if [ "$http_code" = "200" ]; then
+            echo "✅ Синхронизация завершена успешно"
+            echo "$body" | jq '.stats' || echo "$body"
+          else
+            echo "❌ Ошибка синхронизации"
+            echo "$body"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "⏰ Время выполнения: $(date)"
+          echo "🌍 Timezone: UTC"
