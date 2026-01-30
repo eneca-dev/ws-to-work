@@ -53,8 +53,15 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   csv += `Sections Updated,${stats.sectionsUpdated || 0}\n`;
   csv += `Decomposition Stages Created,${stats.stagesCreated || 0}\n`;
   csv += `Decomposition Stages Updated,${stats.stagesUpdated || 0}\n`;
+  csv += `Stage Statuses Synced,${stats.stagesStatusSynced || 0}\n`;
+  csv += `Stage Progress Synced,${stats.stagesProgressSynced || 0}\n`;
+  csv += `Stages Auto-Completed (100%),${stats.stagesAutoCompleted || 0}\n`;
+  csv += `Stages Skipped (No Progress Tag),${stats.stagesSkippedNoProgress || 0}\n`;
   csv += `Decomposition Items Created,${stats.itemsCreated || 0}\n`;
   csv += `Decomposition Items Updated,${stats.itemsUpdated || 0}\n`;
+  csv += `Default Tasks Created,${stats.defaultTasksCreated || 0}\n`;
+  csv += `Default Tasks Found Existing,${stats.defaultTasksFound || 0}\n`;
+  csv += `Task Progress Updated,${stats.taskProgressUpdated || 0}\n`;
   csv += `Work Logs Created,${stats.workLogsCreated || 0}\n`;
   csv += `Work Logs Skipped,${stats.workLogsSkipped || 0}\n`;
   csv += `Budgets Updated,${stats.budgetsUpdated || 0}\n`;
@@ -62,6 +69,74 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   csv += `Orphan Work Logs,${stats.orphanWorkLogs || 0}\n`;
   csv += `Total Errors,${stats.errors || 0}\n`;
   csv += '\n';
+
+  // Секция ERROR DETAILS
+  if (stats.errorDetails && stats.errorDetails.total_errors > 0) {
+    csv += 'ERROR SUMMARY\n';
+    csv += `Total Errors,${stats.errorDetails.total_errors}\n`;
+    csv += `Critical Errors,${stats.errorDetails.critical_errors?.length || 0}\n`;
+    csv += `Warnings,${stats.errorDetails.warnings?.length || 0}\n`;
+    csv += '\n';
+
+    // Группировка по типам
+    if (stats.errorDetails.errors_by_type && Object.keys(stats.errorDetails.errors_by_type).length > 0) {
+      csv += 'ERRORS BY TYPE\n';
+      csv += 'Type,Count\n';
+      Object.entries(stats.errorDetails.errors_by_type).forEach(([type, count]) => {
+        csv += `${type},${count}\n`;
+      });
+      csv += '\n';
+    }
+
+    // Группировка по стадиям
+    if (stats.errorDetails.errors_by_stage && Object.keys(stats.errorDetails.errors_by_stage).length > 0) {
+      csv += 'ERRORS BY STAGE\n';
+      csv += 'Stage,Count\n';
+      Object.entries(stats.errorDetails.errors_by_stage).forEach(([stage, count]) => {
+        csv += `${stage},${count}\n`;
+      });
+      csv += '\n';
+    }
+
+    // Детальная таблица критических ошибок
+    if (stats.errorDetails.critical_errors && stats.errorDetails.critical_errors.length > 0) {
+      csv += 'CRITICAL ERRORS DETAILS\n';
+      csv += 'Timestamp,Type,Stage,Message,Project,Task/Stage,Stack Trace\n';
+
+      stats.errorDetails.critical_errors.forEach(error => {
+        const timestamp = formatDateTime(error.timestamp);
+        const type = error.type || 'unknown';
+        const stage = error.stage || 'unknown';
+        const message = (error.message || 'No message').replace(/"/g, '""');
+        const project = (error.context?.project_name || 'N/A').replace(/"/g, '""');
+        const taskStage = (error.context?.task_name || error.context?.stage_name || 'N/A').replace(/"/g, '""');
+        const stack = error.stack ? error.stack.substring(0, 200).replace(/"/g, '""') : 'N/A';
+
+        csv += `${timestamp},${type},${stage},"${message}","${project}","${taskStage}","${stack}"\n`;
+      });
+
+      csv += '\n';
+    }
+
+    // Детальная таблица предупреждений
+    if (stats.errorDetails.warnings && stats.errorDetails.warnings.length > 0) {
+      csv += 'WARNINGS DETAILS\n';
+      csv += 'Timestamp,Type,Message,Project,Task/Stage,Additional Info\n';
+
+      stats.errorDetails.warnings.forEach(warning => {
+        const timestamp = formatDateTime(warning.timestamp);
+        const type = warning.type || 'unknown';
+        const message = (warning.message || 'No message').replace(/"/g, '""');
+        const project = (warning.context?.projectName || 'N/A').replace(/"/g, '""');
+        const taskStage = (warning.context?.taskName || warning.context?.stageName || 'N/A').replace(/"/g, '""');
+        const additional = JSON.stringify(warning.context?.additional || {}).replace(/"/g, '""');
+
+        csv += `${timestamp},${type},"${message}","${project}","${taskStage}","${additional}"\n`;
+      });
+
+      csv += '\n';
+    }
+  }
 
   // Добавляем информацию о дельте, если есть
   if (stats.delta) {
@@ -216,6 +291,7 @@ async function sendCsvFileToChat(csvContent, filename, caption, chatId) {
     contentType: 'text/csv'
   });
   formData.append('caption', caption);
+  formData.append('parse_mode', 'HTML');
 
   const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendDocument`;
   await axios.post(url, formData, {
@@ -238,15 +314,64 @@ async function sendCsvFile(logs, stats, startTime, endTime) {
     const filename = `sync_${formatDateForFilename(endTime)}.csv`;
 
     // Формируем сообщение-заголовок
-    let caption = `📊 Синхронизация завершена\n` +
-      `⏱ Длительность: ${Math.round((endTime - startTime) / 1000)}s\n` +
+    let caption = `📊 <b>Синхронизация завершена</b>\n` +
+      `⏱ Длительность: ${Math.round((endTime - startTime) / 1000)}s\n\n` +
+
+      `<b>Основные метрики:</b>\n` +
       `✅ Проекты: ${stats.projectsCreated} создано, ${stats.projectsUpdated} обновлено\n` +
       `📦 Объекты: ${stats.objectsCreated} создано, ${stats.objectsUpdated} обновлено\n` +
-      `${stats.errors > 0 ? `❌ Ошибки: ${stats.errors}` : '✨ Без ошибок'}`;
+      `📑 Разделы: ${stats.sectionsCreated} создано, ${stats.sectionsUpdated} обновлено\n` +
+      `🔹 Этапы декомпозиции: ${stats.stagesCreated || 0} создано, ${stats.stagesUpdated || 0} обновлено\n` +
+      `🔸 Задачи декомпозиции: ${stats.itemsCreated || 0} создано, ${stats.itemsUpdated || 0} обновлено\n\n`;
+
+    // Новая секция: Статусы и прогресс
+    if (stats.stagesStatusSynced || stats.stagesProgressSynced || stats.stagesAutoCompleted) {
+      caption += `<b>Статусы и прогресс этапов:</b>\n` +
+        `🔹 Статусов синхронизировано: ${stats.stagesStatusSynced || 0}\n` +
+        `📊 Прогресса обновлено: ${stats.stagesProgressSynced || 0}\n` +
+        `🎯 Автоматически 100%: ${stats.stagesAutoCompleted || 0}\n`;
+
+      if (stats.defaultTasksCreated || stats.defaultTasksFound) {
+        caption += `🔸 Дефолтных задач создано: ${stats.defaultTasksCreated || 0}\n` +
+          `🔸 Дефолтных задач найдено: ${stats.defaultTasksFound || 0}\n`;
+      }
+
+      caption += '\n';
+    }
+
+    // Секция ошибок и предупреждений
+    if (stats.errors > 0 || (stats.errorDetails && stats.errorDetails.warnings && stats.errorDetails.warnings.length > 0)) {
+      caption += `<b>Ошибки и предупреждения:</b>\n`;
+
+      if (stats.errorDetails && stats.errorDetails.critical_errors && stats.errorDetails.critical_errors.length > 0) {
+        caption += `❌ Критических ошибок: ${stats.errorDetails.critical_errors.length}\n`;
+      }
+
+      if (stats.errorDetails && stats.errorDetails.warnings && stats.errorDetails.warnings.length > 0) {
+        caption += `⚠️ Предупреждений: ${stats.errorDetails.warnings.length}\n`;
+
+        // Показать топ-3 типа предупреждений
+        const warningTypes = {};
+        stats.errorDetails.warnings.forEach(w => {
+          warningTypes[w.type] = (warningTypes[w.type] || 0) + 1;
+        });
+        const topWarnings = Object.entries(warningTypes)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3);
+
+        topWarnings.forEach(([type, count]) => {
+          caption += `   • ${type}: ${count}\n`;
+        });
+      }
+
+      caption += `\n📄 Детали в CSV файле\n\n`;
+    } else {
+      caption += `✨ <b>Без ошибок</b>\n\n`;
+    }
 
     // Добавляем информацию о дельте, если есть
     if (stats.delta) {
-      caption += `\n\n📈 Добавлено синхронизацией:\n` +
+      caption += `<b>📈 Добавлено синхронизацией:</b>\n` +
         `📋 Проекты: ${stats.delta.projects}\n` +
         `📦 Объекты: ${stats.delta.objects}\n` +
         `📑 Разделы: ${stats.delta.sections}\n` +

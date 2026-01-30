@@ -2,18 +2,30 @@ const cron = require('node-cron');
 const logger = require('../utils/logger');
 const syncManager = require('../sync/sync-manager');
 
-// Расписание синхронизации (часы)
-const SYNC_HOURS = [0, 3, 6, 9, 12, 15, 18, 21]; // Каждые 3 часа
-const TIMEZONE = 'Europe/Minsk'; // Временная зона
+// Расписание синхронизации (каждые 3 часа)
+const SYNC_HOURS = [0, 3, 6, 9, 12, 15, 18, 21];
+const TIMEZONE = 'Europe/Minsk';
+
+// Флаг выполнения синхронизации (защита от наложения)
+let syncInProgress = false;
+
+/**
+ * Проверяет, является ли сегодня выходным днём (суббота или воскресенье)
+ * @returns {boolean} true если выходной
+ */
+function isWeekend() {
+  const now = new Date();
+  // Получаем день недели в таймзоне Минска
+  const dayOfWeek = new Date(now.toLocaleString('en-US', { timeZone: TIMEZONE })).getDay();
+  // 0 = воскресенье, 6 = суббота
+  return dayOfWeek === 0 || dayOfWeek === 6;
+}
 
 /**
  * Выполняет запланированную синхронизацию
  */
 async function runScheduledSync() {
-  const now = new Date();
-  const currentHour = now.getHours();
-
-  const timeString = now.toLocaleString('ru-RU', {
+  const timeString = new Date().toLocaleString('ru-RU', {
     timeZone: TIMEZONE,
     hour: '2-digit',
     minute: '2-digit',
@@ -22,19 +34,32 @@ async function runScheduledSync() {
     year: 'numeric'
   });
 
-  logger.info(`⏰ Запуск автоматической синхронизации в ${timeString}`);
+  // Пропускаем синхронизацию по выходным
+  if (isWeekend()) {
+    logger.info(`📅 ${timeString} — выходной день, синхронизация пропущена`);
+    return;
+  }
 
-  // Определяем режим синхронизации отчетов
-  const costsMode = currentHour === 9 ? 'daily' : 'skip';
-  logger.info(`💰 Costs mode: ${costsMode}`);
+  // Защита от наложения синхронизаций
+  if (syncInProgress) {
+    logger.warning(`⚠️ ${timeString} — синхронизация уже выполняется, пропуск`);
+    return;
+  }
+
+  logger.info(`⏰ Запуск автоматической синхронизации в ${timeString}`);
+  logger.info(`📊 Параметры: offset=0, limit=999, costsMode=daily`);
+
+  syncInProgress = true;
 
   try {
-    // Запускаем полную синхронизацию (все проекты)
-    await syncManager.fullSync(0, 999, true, null, costsMode);
+    // Запускаем полную синхронизацию (все проекты, с отчетами за вчера)
+    await syncManager.fullSync(0, 999, true, null, 'daily');
     logger.success('✅ Автоматическая синхронизация завершена успешно');
   } catch (error) {
     logger.error(`❌ Ошибка автоматической синхронизации: ${error.message}`);
     console.error(error.stack);
+  } finally {
+    syncInProgress = false;
   }
 }
 

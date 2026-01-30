@@ -203,10 +203,11 @@ class SupabaseService {
         if (existing.content_hash && validation.data.content_hash) {
           if (!validator.needsUpdate(existing.content_hash, validation.data.content_hash)) {
             logger.info(`Object "${validation.data.object_name}" unchanged, skipping update`);
-            return existing;
+            return { data: existing, wasCreated: false, wasUpdated: false };
           }
         }
-        return await this.updateObject(existing.object_id, validation.data);
+        const updated = await this.updateObject(existing.object_id, validation.data);
+        return { data: updated, wasCreated: false, wasUpdated: true };
       }
 
       const insertPayload = {
@@ -222,7 +223,7 @@ class SupabaseService {
         .select()
         .single();
       if (error) throw error;
-      return created;
+      return { data: created, wasCreated: true, wasUpdated: false };
     } catch (error) {
       if (error.code === '23505') {
         logger.warning(`Duplicate key detected for object, retrying...`);
@@ -230,7 +231,8 @@ class SupabaseService {
           const existing = await this.getObjectByProjectKey(projectId, externalSource, externalId);
           if (existing) {
             const validation = validator.validateObject(data);
-            return await this.updateObject(existing.object_id, validation.data);
+            const updated = await this.updateObject(existing.object_id, validation.data);
+            return { data: updated, wasCreated: false, wasUpdated: true };
           }
         } catch (nestedError) {
           logger.error(`Upsert object (conflict) failed: ${nestedError.message}`);
@@ -335,10 +337,11 @@ class SupabaseService {
         if (existing.content_hash && validation.data.content_hash) {
           if (!validator.needsUpdate(existing.content_hash, validation.data.content_hash)) {
             logger.info(`Section "${validation.data.section_name}" unchanged, skipping update`);
-            return existing;
+            return { data: existing, wasCreated: false, wasUpdated: false };
           }
         }
-        return await this.updateSection(existing.section_id, validation.data);
+        const updated = await this.updateSection(existing.section_id, validation.data);
+        return { data: updated, wasCreated: false, wasUpdated: true };
       }
 
       // Вставка новой записи
@@ -356,7 +359,7 @@ class SupabaseService {
         .single();
 
       if (error) throw error;
-      return created;
+      return { data: created, wasCreated: true, wasUpdated: false };
     } catch (error) {
       // Обработка конфликта уникальности, вызванного триггером в БД
       if (error.code === '23505') {
@@ -364,7 +367,8 @@ class SupabaseService {
         try {
           const existing = await this.getSectionByKey(projectId, externalSource, externalId);
           if (existing) {
-            return await this.updateSection(existing.section_id, data);
+            const updated = await this.updateSection(existing.section_id, data);
+            return { data: updated, wasCreated: false, wasUpdated: true };
           }
         } catch (nestedError) {
           logger.error(`Upsert (conflict recovery) failed: ${nestedError.message}`);
@@ -944,6 +948,54 @@ class SupabaseService {
     } catch (error) {
       logger.error(`Error getting status ID by name "${name}": ${error.message}`);
       return null;
+    }
+  }
+
+  /**
+   * Получить ID статуса этапа по названию из таблицы stage_statuses
+   * @param {string} statusName - Название статуса (например, "В работе")
+   * @returns {Promise<string|null>} UUID статуса или null
+   */
+  async getStageStatusIdByName(statusName) {
+    try {
+      if (!statusName) return null;
+
+      const { data, error } = await this.client
+        .from('stage_statuses')
+        .select('id')
+        .eq('name', statusName)
+        .maybeSingle();
+
+      if (error && error.code !== 'PGRST116') throw error;
+      return data?.id || null;
+    } catch (error) {
+      logger.error(`Error getting stage_status ID by name "${statusName}": ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Обновить процент готовности задачи
+   * @param {string} itemId - UUID decomposition_item
+   * @param {number} progress - Процент готовности (0-100)
+   * @returns {Promise<Object|null>} Обновленная запись или null
+   */
+  async updateDecompositionItemProgress(itemId, progress) {
+    try {
+      if (progress === null || progress === undefined) return null;
+
+      const { data, error } = await this.client
+        .from('decomposition_items')
+        .update({ decomposition_item_progress: progress })
+        .eq('decomposition_item_id', itemId)
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error) {
+      logger.error(`Error updating decomposition_item progress: ${error.message}`);
+      throw error;
     }
   }
 }

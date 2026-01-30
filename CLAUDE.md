@@ -48,6 +48,63 @@ heroku config:set TELEGRAM_CHAT_ID=your_chat_id
 git push heroku main
 ```
 
+### Docker Deployment (Recommended for VPS)
+```bash
+# Full deployment guide in DEPLOY.md
+
+# Quick start:
+docker compose up -d --build
+
+# Check status:
+docker compose ps
+docker compose logs -f
+
+# Stop:
+docker compose down
+
+# Update after git pull:
+git pull
+docker compose up -d --build
+```
+
+## Automated Scheduling
+
+### Built-in Scheduler (node-cron)
+
+The application includes an automatic scheduler that runs sync every 3 hours.
+
+**Location:** `services/scheduler.js`
+
+**Schedule:**
+- ⏰ Every 3 hours: 0:00, 3:00, 6:00, 9:00, 12:00, 15:00, 18:00, 21:00
+- 🌍 Timezone: Europe/Minsk
+- 📅 Skips weekends (Saturday and Sunday)
+- 🔒 Protection against overlapping syncs
+- 📊 Parameters: offset=0, limit=999, costsMode='daily'
+
+**Initialization:**
+Scheduler is automatically initialized on server start in `app.js`:
+```javascript
+scheduler.initScheduler();
+```
+
+**Check schedule via API:**
+```bash
+curl http://localhost:3001/api/schedule
+```
+
+**Important:** In Docker, sync can run as long as needed without SIGTERM interruptions (unlike Heroku's 30-second timeout).
+
+### Alternative: System Cron
+
+**Location:** `scripts/scheduled-sync.js`
+
+Can be used with system cron instead of built-in scheduler:
+```bash
+# Example crontab (every 3 hours)
+0 */3 * * * cd /path/to/ws-to-work && node scripts/scheduled-sync.js >> /var/log/sync.log 2>&1
+```
+
 ## Architecture
 
 ### Key Design Principles
@@ -105,6 +162,7 @@ git push heroku main
 - Telegram Bot API client for notifications
 - Generates CSV files with sync logs, statistics, and delta
 - Sends reports to Telegram chat after each sync
+- Supports sending to multiple chats (TELEGRAM_CHAT_ID and TELEGRAM_CHAT_ID_2)
 - Formats start/completion/error notifications
 - Optional feature (enabled when TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set)
 
@@ -175,6 +233,7 @@ Optional:
 - `SYNC_MAX_RETRIES` - Max retry attempts (default: 3)
 - `TELEGRAM_BOT_TOKEN` - Telegram bot token for notifications (optional)
 - `TELEGRAM_CHAT_ID` - Telegram chat ID to send reports (optional)
+- `TELEGRAM_CHAT_ID_2` - Second Telegram chat ID for sending reports to multiple chats (optional)
 - `HEROKU_APP_NAME` - Heroku app name for webhook auto-configuration (optional, Heroku only)
 
 Create `.env` file in ws-to-work/ directory with these variables.
@@ -189,22 +248,18 @@ The system can automatically send sync reports as CSV files to Telegram after ea
    - Open Telegram and find @BotFather
    - Send `/newbot` command
    - Follow instructions to create bot
-   - Copy the bot token (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
 
 2. **Get Your Chat ID:**
    - Find @userinfobot in Telegram
    - Send `/start` command
-   - Copy your user ID (format: `123456789`)
+   - Copy your user ID
 
 3. **Set Environment Variables:**
    ```bash
    # Local development (.env file)
-   TELEGRAM_BOT_TOKEN=8501740582:AAHuFmjq0hHk-uVtQfjTMOuZWRMAHJh_uXQ
-   TELEGRAM_CHAT_ID=432588564
-
-   # Heroku deployment
-   heroku config:set TELEGRAM_BOT_TOKEN=8501740582:AAHuFmjq0hHk-uVtQfjTMOuZWRMAHJh_uXQ
-   heroku config:set TELEGRAM_CHAT_ID=432588564
+   TELEGRAM_BOT_TOKEN=
+   TELEGRAM_CHAT_ID=
+   TELEGRAM_CHAT_ID_2=
    ```
 
 4. **Start Bot Conversation:**

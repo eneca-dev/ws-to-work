@@ -7,6 +7,15 @@ const syncManager = require('../sync/sync-manager');
 const logger = require('../utils/logger');
 
 /**
+ * Проверяет, является ли сегодня выходным днём
+ */
+function isWeekend() {
+  const now = new Date();
+  const dayOfWeek = new Date(now.toLocaleString('en-US', { timeZone: 'Europe/Minsk' })).getDay();
+  return dayOfWeek === 0 || dayOfWeek === 6;
+}
+
+/**
  * Проверяет, нужно ли запускать синхронизацию в текущий час
  */
 function shouldRunSync() {
@@ -24,6 +33,12 @@ async function main() {
 
   console.log(`[${now.toISOString()}] Scheduled sync check: hour ${currentHour}`);
 
+  // Пропускаем выходные
+  if (isWeekend()) {
+    console.log(`📅 Weekend day, skipping sync`);
+    process.exit(0);
+  }
+
   if (!shouldRunSync()) {
     console.log(`Skipping sync - not scheduled for hour ${currentHour}`);
     console.log(`Next sync at: ${Math.ceil(currentHour / 3) * 3}:00`);
@@ -33,15 +48,14 @@ async function main() {
   console.log(`✅ Starting scheduled sync at hour ${currentHour}`);
 
   try {
-    // Определяем режим синхронизации отчетов:
-    // - В 09:00 (утром) - синхронизируем отчеты за вчера ('daily')
-    // - В остальное время - без отчетов ('skip')
-    const costsMode = currentHour === 9 ? 'daily' : 'skip';
+    // Режим синхронизации отчетов: всегда 'daily' (отчеты за вчера)
+    const costsMode = 'daily';
 
-    console.log(`💰 Costs mode: ${costsMode} ${costsMode === 'daily' ? '(syncing yesterday\'s reports)' : '(skipping reports)'}`);
+    console.log(`💰 Costs mode: ${costsMode} (syncing yesterday's reports)`);
+    console.log(`📊 Parameters: offset=0, limit=999`);
 
     // Запускаем полную синхронизацию
-    // offset=0, limit=999 (все проекты), sendNotifications=true, projectId=null, costsMode
+    // offset=0, limit=999 (все проекты), sendNotifications=true, projectId=null, costsMode=daily
     const result = await syncManager.fullSync(0, 999, true, null, costsMode);
 
     if (result.success) {
@@ -70,6 +84,17 @@ async function main() {
     process.exit(1);
   }
 }
+
+// Обработка сигналов для graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('Получен SIGTERM, завершение работы...');
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('Получен SIGINT, завершение работы...');
+  process.exit(0);
+});
 
 // Запуск скрипта
 main();
