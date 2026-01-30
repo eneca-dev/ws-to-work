@@ -19,8 +19,8 @@ RUN npm ci --only=production
 # Копируем весь код приложения
 COPY . .
 
-# Открываем порт 3001 (согласно config/env.js)
-EXPOSE 3001
+# Открываем порт 3004
+EXPOSE 3004
 
 # Запускаем приложение
 CMD ["npm", "start"]
