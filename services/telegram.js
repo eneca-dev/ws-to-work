@@ -320,7 +320,9 @@ async function sendCsvFile(logs, stats, startTime, endTime) {
       `<b>Основные метрики:</b>\n` +
       `✅ Проекты: ${stats.projectsCreated} создано, ${stats.projectsUpdated} обновлено\n` +
       `📦 Объекты: ${stats.objectsCreated} создано, ${stats.objectsUpdated} обновлено\n` +
-      `📑 Разделы: ${stats.sectionsCreated} создано, ${stats.sectionsUpdated} обновлено\n\n`;
+      `📑 Разделы: ${stats.sectionsCreated} создано, ${stats.sectionsUpdated} обновлено\n` +
+      `🔹 Этапы декомпозиции: ${stats.stagesCreated || 0} создано, ${stats.stagesUpdated || 0} обновлено\n` +
+      `🔸 Задачи декомпозиции: ${stats.itemsCreated || 0} создано, ${stats.itemsUpdated || 0} обновлено\n\n`;
 
     // Новая секция: Статусы и прогресс
     if (stats.stagesStatusSynced || stats.stagesProgressSynced || stats.stagesAutoCompleted) {

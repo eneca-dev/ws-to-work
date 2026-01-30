@@ -226,8 +226,8 @@ class SyncApp {
           }
         }
 
-        // ✨ Планировщик отключен - используется GitHub Actions для автоматической синхронизации
-        // scheduler.initScheduler();
+        // ✨ Инициализация планировщика автоматической синхронизации
+        scheduler.initScheduler();
       });
 
     } catch (error) {
