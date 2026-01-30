@@ -60,7 +60,7 @@ async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
 
         if (!existingPlaceholder) {
           try {
-            const createdObject = await supabase.upsertObjectByProjectKey(
+            const result = await supabase.upsertObjectByProjectKey(
               project.project_id,
               'worksection-os',
               placeholderExternalId,
@@ -70,20 +70,26 @@ async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
               }
             );
 
-            if (createdObject) {
+            if (result.wasCreated) {
               logger.success(`✅ Created OS placeholder object: ${project.project_name}`);
               stats.objects.created++;
-
-              if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-              stats.detailed_report.actions.push({
-                type: 'object',
-                action: 'created',
-                name: project.project_name + ' (placeholder)',
-                project: project.project_name,
-                external_id: placeholderExternalId,
-                sync_type: 'os'
-              });
+            } else if (result.wasUpdated) {
+              logger.info(`🔄 Updated OS placeholder object: ${project.project_name}`);
+              stats.objects.updated++;
+            } else {
+              stats.objects.unchanged++;
             }
+
+            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            const action = result.wasCreated ? 'created' : result.wasUpdated ? 'updated' : 'unchanged';
+            stats.detailed_report.actions.push({
+              type: 'object',
+              action: action,
+              name: project.project_name + ' (placeholder)',
+              project: project.project_name,
+              external_id: placeholderExternalId,
+              sync_type: 'os'
+            });
           } catch (error) {
             logger.error(`Failed to create OS placeholder object ${project.project_name}: ${error.message}`);
             stats.objects.errors++;
@@ -158,26 +164,32 @@ async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
           };
 
           try {
-            const createdObject = await supabase.upsertObjectByProjectKey(
+            const result = await supabase.upsertObjectByProjectKey(
               project.project_id,
               'worksection',
               taskGroup.id.toString(),
               newObjectData
             );
 
-            if (createdObject) {
+            if (result.wasCreated) {
               logger.success(`✅ Created object: ${taskGroup.name} for project ${project.project_name}`);
               stats.objects.created++;
-
-              if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-              stats.detailed_report.actions.push({
-                type: 'object',
-                action: 'created',
-                name: taskGroup.name,
-                project: project.project_name,
-                external_id: taskGroup.id.toString()
-              });
+            } else if (result.wasUpdated) {
+              logger.info(`🔄 Updated object: ${taskGroup.name} for project ${project.project_name}`);
+              stats.objects.updated++;
+            } else {
+              stats.objects.unchanged++;
             }
+
+            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            const action = result.wasCreated ? 'created' : result.wasUpdated ? 'updated' : 'unchanged';
+            stats.detailed_report.actions.push({
+              type: 'object',
+              action: action,
+              name: taskGroup.name,
+              project: project.project_name,
+              external_id: taskGroup.id.toString()
+            });
           } catch (error) {
             logger.error(`Failed to create object ${taskGroup.name}: ${error.message}`);
             stats.objects.errors++;
@@ -353,18 +365,26 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
             }
             
             // Идемпотентный upsert с учетом нового триггера
-            await supabase.upsertSectionByKey(
+            const result = await supabase.upsertSectionByKey(
               project.project_id,
               'worksection-os',
               wsTask.id.toString(),
               sectionData
             );
-            stats.sections.created++;
-            
+
+            if (result.wasCreated) {
+              stats.sections.created++;
+            } else if (result.wasUpdated) {
+              stats.sections.updated++;
+            } else {
+              stats.sections.unchanged++;
+            }
+
             // Добавляем в отчет
             if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            const action = result.wasCreated ? 'created' : result.wasUpdated ? 'updated' : 'unchanged';
             stats.detailed_report.actions.push({
-              action: 'created',
+              action: action,
               type: 'section',
               id: wsTask.id,
               name: wsTask.name,
@@ -509,18 +529,26 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
             }
             
             // Идемпотентный upsert с учетом нового триггера
-            await supabase.upsertSectionByKey(
+            const result = await supabase.upsertSectionByKey(
               project.project_id,
               'worksection',
               wsSubtask.id.toString(),
               sectionData
             );
-            stats.sections.created++;
-            
+
+            if (result.wasCreated) {
+              stats.sections.created++;
+            } else if (result.wasUpdated) {
+              stats.sections.updated++;
+            } else {
+              stats.sections.unchanged++;
+            }
+
             // Добавляем в отчет
             if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            const action = result.wasCreated ? 'created' : result.wasUpdated ? 'updated' : 'unchanged';
             stats.detailed_report.actions.push({
-              action: 'created',
+              action: action,
               type: 'section',
               id: wsSubtask.id,
               name: wsSubtask.name,

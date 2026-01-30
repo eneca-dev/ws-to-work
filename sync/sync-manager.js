@@ -1,7 +1,7 @@
 const logger = require('../utils/logger');
 const { syncProjects } = require('./project-sync');
 const { syncObjects, syncSections } = require('./content-sync');
-const { syncDecompositionStages } = require('./stage-sync');
+const { syncDecompositionStages, clearTagCache } = require('./stage-sync');
 const { syncCosts } = require('./costs-sync');
 const telegram = require('../services/telegram');
 const supabaseService = require('../services/supabase');
@@ -14,8 +14,27 @@ class SyncManager {
       projects: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       objects: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       sections: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
-      decomposition_stages: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
-      decomposition_items: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
+      decomposition_stages: {
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        errors: 0,
+        skipped: 0,
+        status_synced: 0,
+        progress_synced: 0,
+        auto_completed: 0,
+        skipped_no_progress: 0
+      },
+      decomposition_items: {
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        errors: 0,
+        skipped: 0,
+        progress_updated: 0,
+        default_tasks_created: 0,
+        default_tasks_found: 0
+      },
       work_logs: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       budgets: { updated: 0, errors: 0, total_increase: 0 },
       orphan_work_logs: { total: 0, details: [] },
@@ -33,7 +52,14 @@ class SyncManager {
         empty_queries: 0,
         searches: []
       },
-      detailed_report: { actions: [] }
+      detailed_report: { actions: [] },
+      error_details: {
+        total_errors: 0,
+        errors_by_type: {},
+        errors_by_stage: {},
+        critical_errors: [],
+        warnings: []
+      }
     };
   }
   
@@ -131,8 +157,15 @@ class SyncManager {
         sectionsUpdated: this.stats.sections.updated,
         stagesCreated: this.stats.decomposition_stages.created,
         stagesUpdated: this.stats.decomposition_stages.updated,
+        stagesStatusSynced: this.stats.decomposition_stages.status_synced,
+        stagesProgressSynced: this.stats.decomposition_stages.progress_synced,
+        stagesAutoCompleted: this.stats.decomposition_stages.auto_completed,
+        stagesSkippedNoProgress: this.stats.decomposition_stages.skipped_no_progress,
         itemsCreated: this.stats.decomposition_items.created,
         itemsUpdated: this.stats.decomposition_items.updated,
+        defaultTasksCreated: this.stats.decomposition_items.default_tasks_created,
+        defaultTasksFound: this.stats.decomposition_items.default_tasks_found,
+        taskProgressUpdated: this.stats.decomposition_items.progress_updated,
         workLogsCreated: this.stats.work_logs.created,
         workLogsSkipped: this.stats.work_logs.skipped,
         budgetsUpdated: this.stats.budgets.updated,
@@ -142,6 +175,7 @@ class SyncManager {
         errors: this.stats.projects.errors + this.stats.objects.errors + this.stats.sections.errors +
                 this.stats.decomposition_stages.errors + this.stats.decomposition_items.errors +
                 this.stats.work_logs.errors + this.stats.budgets.errors,
+        errorDetails: this.stats.error_details,
         // Добавляем информацию о дельте
         countBefore,
         countAfter,
@@ -149,9 +183,10 @@ class SyncManager {
       };
       await telegram.sendCsvFile(logger.getLogs(), telegramStats, new Date(startTime), endTime);
 
-      // ✨ Очищаем кэш после синхронизации
+      // ✨ Очищаем кэши после синхронизации
       if (!projectId) {  // Только при полной синхронизации
         userCache.clear();
+        clearTagCache();
       }
 
       return {
@@ -164,8 +199,9 @@ class SyncManager {
       };
 
     } catch (error) {
-      // ✨ Очищаем кэш при ошибке
+      // ✨ Очищаем кэши при ошибке
       userCache.clear();
+      clearTagCache();
 
       logger.error(`❌ Full synchronization failed: ${error.message}`);
 
@@ -409,8 +445,27 @@ class SyncManager {
       projects: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       objects: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       sections: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
-      decomposition_stages: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
-      decomposition_items: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
+      decomposition_stages: {
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        errors: 0,
+        skipped: 0,
+        status_synced: 0,
+        progress_synced: 0,
+        auto_completed: 0,
+        skipped_no_progress: 0
+      },
+      decomposition_items: {
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        errors: 0,
+        skipped: 0,
+        progress_updated: 0,
+        default_tasks_created: 0,
+        default_tasks_found: 0
+      },
       work_logs: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       budgets: { updated: 0, errors: 0, total_increase: 0 },
       orphan_work_logs: { total: 0, details: [] },
@@ -428,7 +483,14 @@ class SyncManager {
         empty_queries: 0,
         searches: []
       },
-      detailed_report: { actions: [] }
+      detailed_report: { actions: [] },
+      error_details: {
+        total_errors: 0,
+        errors_by_type: {},
+        errors_by_stage: {},
+        critical_errors: [],
+        warnings: []
+      }
     };
   }
   

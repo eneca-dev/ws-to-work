@@ -68,13 +68,26 @@ class WorksectionService {
   }
   
   async getProjectTasks(projectId) {
-    const data = await this.request('get_tasks', { 
+    const data = await this.request('get_tasks', {
       id_project: projectId,
       extra: 'subtasks'
     });
     return data.data || [];
   }
-  
+
+  /**
+   * Получить отдельную задачу с полной информацией (включая теги)
+   * Используется для вложенных задач, т.к. get_tasks не всегда возвращает теги для child
+   * @param {string} taskId - ID задачи
+   * @returns {Promise<Object|null>} Задача с полной информацией
+   */
+  async getTask(taskId) {
+    const data = await this.request('get_task', {
+      id_task: taskId
+    });
+    return data.data || null;
+  }
+
   async getProjectsWithTag(tagName = 'eneca.work sync') {
     const projects = await this.getProjects();
     return projects.filter(project => {
@@ -197,6 +210,34 @@ class WorksectionService {
 
     const data = await this.request('get_costs', params);
     return data.data || [];
+  }
+
+  /**
+   * Получить все теги задач с информацией о наборах
+   * Используется для маппинга тегов к наборам типа "Статус" и "% готовности"
+   * @returns {Promise<Array>} Массив тегов с метаданными group
+   */
+  async getTaskTags() {
+    const data = await this.request('get_task_tags');
+    return data.data || [];
+  }
+
+  /**
+   * Создать карту тегов: TAG_ID → информация о теге и наборе
+   * @param {Array} allTags - результат getTaskTags()
+   * @returns {Object} { tagId: { title, groupName, groupType, groupId } }
+   */
+  buildTagMap(allTags) {
+    const tagMap = {};
+    allTags.forEach(tag => {
+      tagMap[tag.id] = {
+        title: tag.title,                    // "50%", "В работе"
+        groupName: tag.group?.title || null, // "% готовности", "Статус"
+        groupType: tag.group?.type || null,  // "label", "status"
+        groupId: tag.group?.id || null
+      };
+    });
+    return tagMap;
   }
 }
 
