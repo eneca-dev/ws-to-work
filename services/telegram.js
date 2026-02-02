@@ -189,9 +189,29 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   }
 
   csv += 'DETAILED LOGS\n';
+
+  // Ограничиваем количество логов: первые 10,000 + последние 10,000
+  const MAX_FIRST_LOGS = 10000;
+  const MAX_LAST_LOGS = 10000;
+  const MAX_TOTAL_LOGS = MAX_FIRST_LOGS + MAX_LAST_LOGS;
+
+  let logsToInclude = [];
+
+  if (logs.length <= MAX_TOTAL_LOGS) {
+    // Если логов мало - включаем все
+    logsToInclude = logs;
+  } else {
+    // Берем первые 10,000 и последние 10,000
+    const firstLogs = logs.slice(0, MAX_FIRST_LOGS);
+    const lastLogs = logs.slice(-MAX_LAST_LOGS);
+    logsToInclude = firstLogs.concat(lastLogs);
+
+    csv += `Note: Showing first ${MAX_FIRST_LOGS} and last ${MAX_LAST_LOGS} of ${logs.length} total logs (${logs.length - MAX_TOTAL_LOGS} logs omitted from middle)\n`;
+  }
+
   csv += 'Timestamp,Level,Message\n';
 
-  logs.forEach(log => {
+  logsToInclude.forEach(log => {
     const timestamp = formatDateTime(log.timestamp);
     const level = log.level;
     const message = log.message.replace(/"/g, '""'); // Экранируем кавычки
@@ -294,10 +314,23 @@ async function sendCsvFileToChat(csvContent, filename, caption, chatId) {
   formData.append('parse_mode', 'HTML');
 
   const url = `https://api.telegram.org/bot${config.telegram.botToken}/sendDocument`;
-  await axios.post(url, formData, {
-    headers: formData.getHeaders(),
-    timeout: 10000
-  });
+
+  try {
+    await axios.post(url, formData, {
+      headers: formData.getHeaders(),
+      timeout: 60000, // Увеличен таймаут до 60 секунд
+      maxBodyLength: 50 * 1024 * 1024 // Максимум 50 MB
+    });
+  } catch (error) {
+    // Если ошибка 413 (файл слишком большой) - отправить только caption
+    if (error.response?.status === 413) {
+      logger.warning(`⚠️ CSV file too large for Telegram (413), sending summary only to chat ${chatId}`);
+      const fallbackMessage = caption + '\n\n⚠️ <i>CSV файл слишком большой для отправки (превышен лимит Telegram API)</i>';
+      await sendMessageToChat(fallbackMessage, chatId);
+    } else {
+      throw error;
+    }
+  }
 }
 
 /**
