@@ -139,8 +139,12 @@ async function syncCosts(stats, offset = 0, limit = 7, projectId = null, costsMo
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // ЭТАП Б: ОБНАРУЖЕНИЕ "ЛИШНИХ" WORK_LOGS
+        // ⚠️ Только в режиме 'full' — в режиме 'daily'/'date' будут ложные срабатывания,
+        // т.к. сравниваются ВСЕ work_logs с costs только за один день
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        await detectOrphanWorkLogs(wsProject, wsCostIds, stats);
+        if (costsMode === 'full') {
+          await detectOrphanWorkLogs(wsProject, wsCostIds, stats);
+        }
 
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // ЭТАП В: СИНХРОНИЗАЦИЯ WORK_LOGS
