@@ -46,14 +46,18 @@ async function runScheduledSync() {
     return;
   }
 
+  // Определяем режим синхронизации отчётов: только в 6:00
+  const currentHour = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE })).getHours();
+  const costsMode = (currentHour === 6) ? 'daily' : 'skip';
+
   logger.info(`⏰ Запуск автоматической синхронизации в ${timeString}`);
-  logger.info(`📊 Параметры: offset=0, limit=999, costsMode=daily`);
+  logger.info(`📊 Параметры: offset=0, limit=999, costsMode=${costsMode}${costsMode === 'daily' ? ' (отчёты за вчера)' : ' (без отчётов)'}`);
 
   syncInProgress = true;
 
   try {
-    // Запускаем полную синхронизацию (все проекты, с отчетами за вчера)
-    await syncManager.fullSync(0, 999, true, null, 'daily');
+    // Запускаем синхронизацию (отчёты только в 6:00)
+    await syncManager.fullSync(0, 999, true, null, costsMode);
     logger.success('✅ Автоматическая синхронизация завершена успешно');
   } catch (error) {
     logger.error(`❌ Ошибка автоматической синхронизации: ${error.message}`);
