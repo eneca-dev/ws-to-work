@@ -258,8 +258,8 @@ async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats) {
   try {
     // Статус берем из набора с type="status"
     const statusTag = extractTagByGroupType(wsTask.tags, tagMap, 'status');
-    // Прогресс берем из набора "⇆ % готовности" - максимальное значение если меток несколько
-    const progressTag = extractMaxProgressTag(wsTask.tags, tagMap, '⇆ % готовности');
+    // Прогресс берем из набора "01. ⇆ % готовности" - максимальное значение если меток несколько
+    const progressTag = extractMaxProgressTag(wsTask.tags, tagMap, '01. ⇆ % готовности');
 
     logger.info(`   📊 Tags found - Status: "${statusTag}", Progress: "${progressTag}"`);
 

@@ -25,7 +25,8 @@ function isWeekend() {
  * Выполняет запланированную синхронизацию
  */
 async function runScheduledSync() {
-  const timeString = new Date().toLocaleString('ru-RU', {
+  const now = new Date();
+  const timeString = now.toLocaleString('ru-RU', {
     timeZone: TIMEZONE,
     hour: '2-digit',
     minute: '2-digit',
@@ -34,10 +35,20 @@ async function runScheduledSync() {
     year: 'numeric'
   });
 
-  // Пропускаем синхронизацию по выходным
-  if (isWeekend()) {
-    logger.info(`📅 ${timeString} — выходной день, синхронизация пропущена`);
+  // Определяем текущий час в таймзоне Минска (исправленный метод)
+  const minsk = new Date(now.toLocaleString('en-US', { timeZone: TIMEZONE }));
+  const currentHour = minsk.getHours();
+
+  const isWeekendDay = isWeekend();
+
+  // В выходные запускаем ТОЛЬКО в 6:00 с отчетами
+  if (isWeekendDay && currentHour !== 6) {
+    logger.info(`📅 ${timeString} — выходной день, синхронизация только в 6:00 (сейчас ${currentHour}:00)`);
     return;
+  }
+
+  if (isWeekendDay) {
+    logger.info(`📅 ${timeString} — выходной день: запуск синхронизации в 6:00 с отчетами за вчера`);
   }
 
   // Защита от наложения синхронизаций
@@ -47,7 +58,6 @@ async function runScheduledSync() {
   }
 
   // Определяем режим синхронизации отчётов: только в 6:00
-  const currentHour = new Date(new Date().toLocaleString('en-US', { timeZone: TIMEZONE })).getHours();
   const costsMode = (currentHour === 6) ? 'daily' : 'skip';
 
   logger.info(`⏰ Запуск автоматической синхронизации в ${timeString}`);
