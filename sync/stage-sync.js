@@ -272,13 +272,6 @@ async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats) {
       stageName: stage.decomposition_stage_name
     };
 
-    // Проверяем системный статус задачи - если done, то автоматически 100%
-    let isCompleted = false;
-    if (wsTask.status === 'done') {
-      isCompleted = true;
-      logger.info(`   ✅ Task system status is 'done' → auto-setting progress to 100%`);
-    }
-
     // === СИНХРОНИЗАЦИЯ СТАТУСА (тег) ===
     if (statusTag) {
       try {
@@ -320,7 +313,7 @@ async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats) {
 
     // === СИНХРОНИЗАЦИЯ % ГОТОВНОСТИ ===
 
-    if (!progressTag && !isCompleted) {
+    if (!progressTag) {
       logStructuredWarning(
         stats,
         'no_progress_tag',
@@ -331,34 +324,27 @@ async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats) {
       return;
     }
 
-    let progressValue;
-    if (isCompleted) {
-      progressValue = 100;
-      logger.success(`   🎯 Auto-set progress to 100% (system status: done)`);
-      stats.decomposition_stages.auto_completed++;
-    } else {
-      progressValue = parseInt(progressTag.replace('%', '').trim());
+    const progressValue = parseInt(progressTag.replace('%', '').trim());
 
-      if (isNaN(progressValue)) {
-        logStructuredWarning(
-          stats,
-          'invalid_progress_tag',
-          `Could not parse progress from tag: "${progressTag}"`,
-          { ...context, progressTag }
-        );
-        return;
-      }
+    if (isNaN(progressValue)) {
+      logStructuredWarning(
+        stats,
+        'invalid_progress_tag',
+        `Could not parse progress from tag: "${progressTag}"`,
+        { ...context, progressTag }
+      );
+      return;
+    }
 
-      // Валидация диапазона (0-100)
-      if (progressValue < 0 || progressValue > 100) {
-        logStructuredWarning(
-          stats,
-          'invalid_progress_range',
-          `Progress value out of range (0-100): ${progressValue}`,
-          { ...context, progressTag, progressValue }
-        );
-        return;
-      }
+    // Валидация диапазона (0-100)
+    if (progressValue < 0 || progressValue > 100) {
+      logStructuredWarning(
+        stats,
+        'invalid_progress_range',
+        `Progress value out of range (0-100): ${progressValue}`,
+        { ...context, progressTag, progressValue }
+      );
+      return;
     }
 
     try {
