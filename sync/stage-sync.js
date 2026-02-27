@@ -493,10 +493,15 @@ async function syncSingleDecompositionStage(wsNestedTask, supaSection, stats, ta
     const externalId = String(wsNestedTask.id);
 
     // Ищем ответственного
+    // userFound — флаг что пользователь найден в кэше
     let responsibles = [];
+    let userFound = false;
     if (wsNestedTask.user_to?.email) {
       const user = userCache.findUser(wsNestedTask.user_to.email, stats);
-      if (user) responsibles = [user.user_id];
+      if (user) {
+        responsibles = [user.user_id];
+        userFound = true;
+      }
     }
 
     // Ищем существующий этап из кэша вместо запроса к БД
@@ -508,19 +513,26 @@ async function syncSingleDecompositionStage(wsNestedTask, supaSection, stats, ta
       decomposition_stage_description: wsNestedTask.text || null,
       decomposition_stage_start: wsNestedTask.date_start || null,
       decomposition_stage_finish: wsNestedTask.date_end || null,
-      decomposition_stage_responsibles: responsibles,
       external_id: externalId,
       external_source: 'worksection'
     };
+    // Включаем ответственного только если пользователь найден в кэше
+    if (userFound) {
+      stageData.decomposition_stage_responsibles = responsibles;
+    }
 
     let stage;
 
     if (existingStage) {
-      // Проверяем изменилось ли название или ответственный
       const existingResponsible = (existingStage.decomposition_stage_responsibles || [])[0] || null;
       const newResponsible = responsibles[0] || null;
+
+      // Ответственного сравниваем только если пользователь найден в кэше.
+      // Если email есть в WS, но пользователь не найден — не трогаем поле,
+      // чтобы не затереть ранее назначенного ответственного.
+      const responsibleChanged = userFound && existingResponsible !== newResponsible;
       const hasChanges = existingStage.decomposition_stage_name !== wsNestedTask.name ||
-                         existingResponsible !== newResponsible;
+                         responsibleChanged;
 
       if (hasChanges) {
         await supabase.updateDecompositionStage(existingStage.decomposition_stage_id, stageData);
