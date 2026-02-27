@@ -7,7 +7,23 @@ class SupabaseService {
   constructor() {
     this.client = createClient(config.supabase.url, config.supabase.key);
   }
-  
+
+  // Загружает все строки таблицы постранично, обходя лимит PostgREST
+  async _fetchAllPages(builderFn) {
+    const PAGE_SIZE = 1000;
+    const allData = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await builderFn().range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allData.push(...data);
+      if (data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+    return allData;
+  }
+
   // Projects
   async getProjects() {
     try {
@@ -246,12 +262,9 @@ class SupabaseService {
   // Sections
   async getSections() {
     try {
-      const { data, error } = await this.client
-        .from('sections')
-        .select('*');
-      
-      if (error) throw error;
-      return data || [];
+      return await this._fetchAllPages(() =>
+        this.client.from('sections').select('*')
+      );
     } catch (error) {
       logger.error(`Error getting sections: ${error.message}`);
       throw error;
@@ -633,6 +646,17 @@ class SupabaseService {
     }
   }
 
+  async getDecompositionStages() {
+    try {
+      return await this._fetchAllPages(() =>
+        this.client.from('decomposition_stages').select('*').eq('external_source', 'worksection')
+      );
+    } catch (error) {
+      logger.error(`Error getting decomposition_stages: ${error.message}`);
+      throw error;
+    }
+  }
+
   async createDecompositionStage(data) {
     try {
       const { data: result, error } = await this.client
@@ -700,6 +724,17 @@ class SupabaseService {
       return data;
     } catch (error) {
       logger.error(`Error getting decomposition_item by external_id: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async getDecompositionItems() {
+    try {
+      return await this._fetchAllPages(() =>
+        this.client.from('decomposition_items').select('*').eq('external_source', 'worksection')
+      );
+    } catch (error) {
+      logger.error(`Error getting decomposition_items: ${error.message}`);
       throw error;
     }
   }

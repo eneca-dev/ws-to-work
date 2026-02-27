@@ -28,8 +28,6 @@ async function getCachedIds() {
 
 /**
  * Загрузить и кэшировать карту тегов из Worksection
- * @param {Object} stats - Объект статистики (для логирования предупреждений)
- * @returns {Promise<Object>} Карта тегов: tagId → { title, groupName, groupType }
  */
 async function loadTagMap(stats) {
   if (cachedTagMap) {
@@ -44,8 +42,6 @@ async function loadTagMap(stats) {
     return cachedTagMap;
   } catch (error) {
     logger.error(`Failed to load tag map: ${error.message}`);
-
-    // Структурированное предупреждение
     if (stats && stats.error_details) {
       logStructuredWarning(
         stats,
@@ -54,42 +50,17 @@ async function loadTagMap(stats) {
         { error: error.stack }
       );
     }
-
     return {};
   }
 }
 
 /**
- * Извлечь тег из конкретного набора
- * @param {Object} taskTags - Объект tags из WS задачи
- * @param {Object} tagMap - Карта тегов (из loadTagMap)
- * @param {string} groupName - Название набора (например, "Статус")
- * @returns {string|null} Значение тега или null
- */
-function extractTagFromGroup(taskTags, tagMap, groupName) {
-  if (!taskTags || !tagMap) return null;
-
-  for (const [tagId, tagValue] of Object.entries(taskTags)) {
-    const tagInfo = tagMap[tagId];
-    if (tagInfo && tagInfo.groupName === groupName) {
-      return tagInfo.title;
-    }
-  }
-
-  return null;
-}
-
-/**
  * Извлечь тег из набора по типу (status или label)
- * @param {Object} taskTags - Объект tags из WS задачи
- * @param {Object} tagMap - Карта тегов (из loadTagMap)
- * @param {string} groupType - Тип набора ("status" или "label")
- * @returns {string|null} Значение тега или null
  */
 function extractTagByGroupType(taskTags, tagMap, groupType) {
   if (!taskTags || !tagMap) return null;
 
-  for (const [tagId, tagValue] of Object.entries(taskTags)) {
+  for (const [tagId] of Object.entries(taskTags)) {
     const tagInfo = tagMap[tagId];
     if (tagInfo && tagInfo.groupType === groupType) {
       return tagInfo.title;
@@ -101,10 +72,6 @@ function extractTagByGroupType(taskTags, tagMap, groupType) {
 
 /**
  * Извлечь максимальное значение прогресса если у задачи несколько меток "% готовности"
- * @param {Object} taskTags - Объект tags из WS задачи
- * @param {Object} tagMap - Карта тегов (из loadTagMap)
- * @param {string} groupName - Название набора (например, "⇆ % готовности")
- * @returns {string|null} Значение тега с максимальным процентом или null
  */
 function extractMaxProgressTag(taskTags, tagMap, groupName) {
   if (!taskTags || !tagMap) return null;
@@ -112,12 +79,10 @@ function extractMaxProgressTag(taskTags, tagMap, groupName) {
   let maxValue = -1;
   let maxTag = null;
 
-  for (const [tagId, tagValue] of Object.entries(taskTags)) {
+  for (const [tagId] of Object.entries(taskTags)) {
     const tagInfo = tagMap[tagId];
     if (tagInfo && tagInfo.groupName === groupName) {
-      // Парсим процент из строки "10%", "50%", "90%"
       const percentValue = parseInt(tagInfo.title.replace('%', '').trim());
-
       if (!isNaN(percentValue) && percentValue > maxValue) {
         maxValue = percentValue;
         maxTag = tagInfo.title;
@@ -130,12 +95,6 @@ function extractMaxProgressTag(taskTags, tagMap, groupName) {
 
 /**
  * Логирует структурированную ошибку в stats
- * @param {Object} stats - Объект статистики
- * @param {string} errorType - Тип ошибки
- * @param {string} stage - Стадия синхронизации
- * @param {Error|string} error - Объект ошибки или строка
- * @param {Object} context - Дополнительный контекст
- * @param {boolean} isCritical - Критическая ли ошибка
  */
 function logStructuredError(stats, errorType, stage, error, context = {}, isCritical = false) {
   const errorDetails = stats.error_details;
@@ -189,11 +148,12 @@ function logStructuredWarning(stats, warningType, message, context = {}) {
  * @param {Object} stage - decomposition_stage из БД
  * @param {string} stageName - Название этапа
  * @param {Object} stats - Объект статистики
- * @returns {Promise<Object|null>} decomposition_item или null
+ * @param {Map} itemsMap - Кэш всех items (externalId → item)
  */
-async function findOrCreateDefaultTask(stage, stageName, stats) {
+async function findOrCreateDefaultTask(stage, stageName, stats, itemsMap) {
   try {
-    let item = await supabase.getDecompositionItemByExternalId(stage.external_id);
+    // Ищем в кэше вместо запроса к БД
+    let item = itemsMap.get(String(stage.external_id));
 
     if (item) {
       logger.info(`   ✅ Found existing default task: ${item.decomposition_item_description}`);
@@ -225,6 +185,8 @@ async function findOrCreateDefaultTask(stage, stageName, stats) {
       logger.success(`   ✅ Created default task: ${createdItem.decomposition_item_description}`);
       stats.decomposition_items.created++;
       stats.decomposition_items.default_tasks_created++;
+      // Добавляем в кэш для последующих обращений
+      itemsMap.set(String(stage.external_id), createdItem);
     }
 
     return createdItem;
@@ -235,11 +197,7 @@ async function findOrCreateDefaultTask(stage, stageName, stats) {
       'database_error',
       'task_creation',
       error,
-      {
-        stageId: stage.decomposition_stage_id,
-        stageName: stageName,
-        externalId: stage.external_id
-      },
+      { stageId: stage.decomposition_stage_id, stageName, externalId: stage.external_id },
       true
     );
     stats.decomposition_items.errors++;
@@ -250,15 +208,15 @@ async function findOrCreateDefaultTask(stage, stageName, stats) {
 /**
  * Синхронизировать статус и % готовности для decomposition_stage
  * @param {Object} stage - decomposition_stage из БД
- * @param {Object} wsTask - Задача из Worksection (nested task)
+ * @param {Object} wsTask - Задача из Worksection
  * @param {Object} tagMap - Карта тегов
  * @param {Object} stats - Объект статистики
+ * @param {Map} itemsMap - Кэш items
+ * @param {Map} statusIdCache - Кэш statusId: statusName → uuid
  */
-async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats) {
+async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats, itemsMap, statusIdCache) {
   try {
-    // Статус берем из набора с type="status"
     const statusTag = extractTagByGroupType(wsTask.tags, tagMap, 'status');
-    // Прогресс берем из набора "01. ⇆ % готовности" - максимальное значение если меток несколько
     const progressTag = extractMaxProgressTag(wsTask.tags, tagMap, '01. ⇆ % готовности');
 
     logger.info(`   📊 Tags found - Status: "${statusTag}", Progress: "${progressTag}"`);
@@ -272,17 +230,23 @@ async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats) {
       stageName: stage.decomposition_stage_name
     };
 
-    // === СИНХРОНИЗАЦИЯ СТАТУСА (тег) ===
+    // === СИНХРОНИЗАЦИЯ СТАТУСА ===
     if (statusTag) {
       try {
-        // Применяем маппинг статусов (Worksection → Supabase)
         const mappedStatusTag = STATUS_MAPPING[statusTag] || statusTag;
 
         if (mappedStatusTag !== statusTag) {
           logger.info(`   🔄 Mapping status: "${statusTag}" → "${mappedStatusTag}"`);
         }
 
-        const statusId = await supabase.getStageStatusIdByName(mappedStatusTag);
+        // Используем кэш statusId вместо запроса к БД на каждый этап
+        let statusId;
+        if (statusIdCache.has(mappedStatusTag)) {
+          statusId = statusIdCache.get(mappedStatusTag);
+        } else {
+          statusId = await supabase.getStageStatusIdByName(mappedStatusTag);
+          statusIdCache.set(mappedStatusTag, statusId);
+        }
 
         if (!statusId) {
           logStructuredWarning(
@@ -300,26 +264,15 @@ async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats) {
         }
       } catch (error) {
         logStructuredError(
-          stats,
-          'database_error',
-          'status_sync',
-          error,
-          { ...context, statusTag },
-          true
+          stats, 'database_error', 'status_sync', error, { ...context, statusTag }, true
         );
         stats.decomposition_stages.errors++;
       }
     }
 
     // === СИНХРОНИЗАЦИЯ % ГОТОВНОСТИ ===
-
     if (!progressTag) {
-      logStructuredWarning(
-        stats,
-        'no_progress_tag',
-        'No progress tag found, skipping default task creation',
-        context
-      );
+      logStructuredWarning(stats, 'no_progress_tag', 'No progress tag found, skipping default task creation', context);
       stats.decomposition_stages.skipped_no_progress++;
       return;
     }
@@ -327,35 +280,21 @@ async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats) {
     const progressValue = parseInt(progressTag.replace('%', '').trim());
 
     if (isNaN(progressValue)) {
-      logStructuredWarning(
-        stats,
-        'invalid_progress_tag',
-        `Could not parse progress from tag: "${progressTag}"`,
-        { ...context, progressTag }
-      );
+      logStructuredWarning(stats, 'invalid_progress_tag', `Could not parse progress from tag: "${progressTag}"`, { ...context, progressTag });
       return;
     }
 
-    // Валидация диапазона (0-100)
     if (progressValue < 0 || progressValue > 100) {
-      logStructuredWarning(
-        stats,
-        'invalid_progress_range',
-        `Progress value out of range (0-100): ${progressValue}`,
-        { ...context, progressTag, progressValue }
-      );
+      logStructuredWarning(stats, 'invalid_progress_range', `Progress value out of range (0-100): ${progressValue}`, { ...context, progressTag, progressValue });
       return;
     }
 
     try {
-      const defaultTask = await findOrCreateDefaultTask(stage, wsTask.name, stats);
+      const defaultTask = await findOrCreateDefaultTask(stage, wsTask.name, stats, itemsMap);
 
       if (defaultTask) {
         if (defaultTask.decomposition_item_progress !== progressValue) {
-          await supabase.updateDecompositionItemProgress(
-            defaultTask.decomposition_item_id,
-            progressValue
-          );
+          await supabase.updateDecompositionItemProgress(defaultTask.decomposition_item_id, progressValue);
           logger.success(`   ✅ Updated task progress: ${progressValue}% for "${defaultTask.decomposition_item_description}"`);
           stats.decomposition_items.updated++;
           stats.decomposition_items.progress_updated++;
@@ -365,29 +304,14 @@ async function syncStageStatusAndProgress(stage, wsTask, tagMap, stats) {
         }
       }
     } catch (error) {
-      logStructuredError(
-        stats,
-        'database_error',
-        'progress_sync',
-        error,
-        { ...context, progressValue },
-        true
-      );
+      logStructuredError(stats, 'database_error', 'progress_sync', error, { ...context, progressValue }, true);
       stats.decomposition_items.errors++;
     }
 
   } catch (error) {
     logStructuredError(
-      stats,
-      'sync_general_error',
-      'stage_status_progress_sync',
-      error,
-      {
-        projectId: wsTask.project_id,
-        taskId: wsTask.id,
-        taskName: wsTask.name
-      },
-      true
+      stats, 'sync_general_error', 'stage_status_progress_sync', error,
+      { projectId: wsTask.project_id, taskId: wsTask.id, taskName: wsTask.name }, true
     );
     stats.decomposition_stages.errors++;
   }
@@ -403,41 +327,42 @@ async function syncDecompositionStages(stats, offset = 0, limit = 7, projectId =
     // Инициализация статистики
     if (!stats.decomposition_stages) {
       stats.decomposition_stages = {
-        created: 0,
-        updated: 0,
-        unchanged: 0,
-        errors: 0,
-        skipped: 0,
-        status_synced: 0,
-        progress_synced: 0,
-        auto_completed: 0,
-        skipped_no_progress: 0
+        created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0,
+        status_synced: 0, progress_synced: 0, auto_completed: 0, skipped_no_progress: 0
       };
     }
     if (!stats.decomposition_items) {
       stats.decomposition_items = {
-        created: 0,
-        updated: 0,
-        unchanged: 0,
-        errors: 0,
-        skipped: 0,
-        progress_updated: 0,
-        default_tasks_created: 0,
-        default_tasks_found: 0
+        created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0,
+        progress_updated: 0, default_tasks_created: 0, default_tasks_found: 0
       };
     }
     if (!stats.error_details) {
       stats.error_details = {
-        total_errors: 0,
-        errors_by_type: {},
-        errors_by_stage: {},
-        critical_errors: [],
-        warnings: []
+        total_errors: 0, errors_by_type: {}, errors_by_stage: {},
+        critical_errors: [], warnings: []
       };
     }
 
     // Загрузить карту тегов один раз для всех проектов
     const tagMap = await loadTagMap(stats);
+
+    // ⚡ ОПТИМИЗАЦИЯ: загружаем все данные из БД одним батчем вместо N+1 запросов
+    const [allStages, allItems, allSections] = await Promise.all([
+      supabase.getDecompositionStages(),
+      supabase.getDecompositionItems(),
+      supabase.getSections()
+    ]);
+
+    // String() защищает от type mismatch: external_id в БД может быть bigint → Map.get("123") ≠ Map.get(123)
+    const stagesMap = new Map(allStages.map(s => [String(s.external_id), s]));
+    const itemsMap = new Map(allItems.map(i => [String(i.external_id), i]));
+    // Ключ секции: "externalId:source" — чтобы различать worksection и worksection-os
+    const sectionsMap = new Map(allSections.map(s => [`${String(s.external_id)}:${s.external_source}`, s]));
+    // Кэш statusId: statusName → uuid (заполняется при первом обращении к каждому статусу)
+    const statusIdCache = new Map();
+
+    logger.info(`⚡ Pre-loaded: ${allStages.length} stages, ${allItems.length} items, ${allSections.length} sections`);
 
     const wsProjects = await worksection.getProjectsWithSyncTags();
 
@@ -450,7 +375,6 @@ async function syncDecompositionStages(stats, offset = 0, limit = 7, projectId =
       return true;
     });
 
-    // Если указан конкретный projectId - фильтруем только его
     if (projectId) {
       filteredProjects = filteredProjects.filter(p => p.id.toString() === projectId.toString());
       if (filteredProjects.length === 0) {
@@ -460,18 +384,15 @@ async function syncDecompositionStages(stats, offset = 0, limit = 7, projectId =
       logger.info(`🎯 Syncing stages for specific project: ${filteredProjects[0].name}`);
     }
 
-    // Применяем offset и limit для пагинации
     const paginatedProjects = projectId ? filteredProjects : filteredProjects.slice(offset, offset + limit);
 
     for (const wsProject of paginatedProjects) {
       try {
         logger.info(`📊 Processing decomposition stages for project: ${wsProject.name}`);
 
-        // Определяем тип синхронизации проекта
         const syncType = worksection.determineProjectSyncType(wsProject);
         logger.info(`📊 Project sync type: ${syncType}`);
 
-        // Получаем все задачи проекта с подзадачами
         const wsTasks = await worksection.getProjectTasks(wsProject.id);
 
         if (!wsTasks || wsTasks.length === 0) {
@@ -480,21 +401,18 @@ async function syncDecompositionStages(stats, offset = 0, limit = 7, projectId =
         }
 
         if (syncType === 'os') {
-          // OS проекты: Task → Section, Subtask → Decomposition Stage
           logger.info(`📊 OS Project: Processing subtasks as decomposition_stages`);
 
           for (const wsTask of wsTasks) {
-            // Пропускаем только задачи начинающиеся с "!"
             if (wsTask.name && wsTask.name.startsWith('!')) {
               logger.info(`🚫 Skipping task starting with "!": ${wsTask.name}`);
               continue;
             }
 
-            // Проверяем есть ли подзадачи
             if (!wsTask.child || wsTask.child.length === 0) continue;
 
-            // Находим section для РОДИТЕЛЬСКОЙ задачи с external_source = 'worksection-os'
-            const supaSection = await supabase.getSectionByExternalId(wsTask.id.toString(), 'worksection-os');
+            // Ищем section из кэша вместо запроса к БД
+            const supaSection = sectionsMap.get(`${wsTask.id}:worksection-os`);
 
             if (!supaSection) {
               logger.warning(`⚠️ Section not found for task ${wsTask.id}: ${wsTask.name}`);
@@ -502,39 +420,32 @@ async function syncDecompositionStages(stats, offset = 0, limit = 7, projectId =
               continue;
             }
 
-            // Обрабатываем подзадачи как decomposition_stages
             for (const wsSubtask of wsTask.child) {
-              const createdStage = await syncSingleDecompositionStage(wsSubtask, supaSection, stats, tagMap);
+              const stage = await syncSingleDecompositionStage(
+                wsSubtask, supaSection, stats, tagMap, stagesMap, itemsMap, statusIdCache
+              );
 
-              // Для OS проектов: если у подзадачи есть вложенные задачи 3-го уровня - синхронизируем их как decomposition_items
-              if (createdStage && wsSubtask.child && wsSubtask.child.length > 0) {
+              if (stage && wsSubtask.child && wsSubtask.child.length > 0) {
                 logger.info(`📋 Found ${wsSubtask.child.length} nested tasks in stage "${wsSubtask.name}", syncing as decomposition_items`);
                 for (const wsNestedTask of wsSubtask.child) {
-                  await syncSingleDecompositionItem(wsNestedTask, createdStage, supaSection, stats);
+                  await syncSingleDecompositionItem(wsNestedTask, stage, supaSection, stats, itemsMap);
                 }
               }
             }
           }
 
         } else {
-          // Standard проекты: вложенные задачи 3-го уровня → decomposition_stages
           logger.info(`📊 Standard Project: Processing 3rd level nested tasks as decomposition_stages`);
 
-          // Обрабатываем каждую задачу (Task → Object)
           for (const wsTask of wsTasks) {
-            // Пропускаем если это не task group или нет подзадач
             if (!wsTask.child || wsTask.child.length === 0) continue;
 
-            // Обрабатываем подзадачи (Subtask → Section)
             for (const wsSubtask of wsTask.child) {
-              // Пропускаем не активные подзадачи
               if (wsSubtask.status !== 'active') continue;
-
-              // Проверяем есть ли вложенные задачи 3-го уровня
               if (!wsSubtask.child || wsSubtask.child.length === 0) continue;
 
-              // Находим section в Supabase по external_id подзадачи
-              const supaSection = await supabase.getSectionByExternalId(wsSubtask.id.toString());
+              // Ищем section из кэша вместо запроса к БД
+              const supaSection = sectionsMap.get(`${wsSubtask.id}:worksection`);
 
               if (!supaSection) {
                 logger.warning(`⚠️ Section not found for subtask ${wsSubtask.id}: ${wsSubtask.name}`);
@@ -542,9 +453,10 @@ async function syncDecompositionStages(stats, offset = 0, limit = 7, projectId =
                 continue;
               }
 
-              // Обрабатываем вложенные задачи 3-го уровня (Nested task → decomposition_stage)
               for (const wsNestedTask of wsSubtask.child) {
-                await syncSingleDecompositionStage(wsNestedTask, supaSection, stats, tagMap);
+                await syncSingleDecompositionStage(
+                  wsNestedTask, supaSection, stats, tagMap, stagesMap, itemsMap, statusIdCache
+                );
               }
             }
           }
@@ -556,7 +468,7 @@ async function syncDecompositionStages(stats, offset = 0, limit = 7, projectId =
       }
     }
 
-    logger.info(`📊 Decomposition stages sync completed: ${stats.decomposition_stages.created} created, ${stats.decomposition_stages.updated} updated`);
+    logger.info(`📊 Decomposition stages sync completed: ${stats.decomposition_stages.created} created, ${stats.decomposition_stages.updated} updated, ${stats.decomposition_stages.unchanged} unchanged`);
 
   } catch (error) {
     logger.error(`❌ Decomposition stages sync error: ${error.message}`);
@@ -566,16 +478,34 @@ async function syncDecompositionStages(stats, offset = 0, limit = 7, projectId =
 
 /**
  * Синхронизация одной decomposition_stage
+ * @param {Object} wsNestedTask - Задача из Worksection
+ * @param {Object} supaSection - Section из Supabase
+ * @param {Object} stats - Объект статистики
+ * @param {Object} tagMap - Карта тегов
+ * @param {Map} stagesMap - Кэш stages (externalId → stage)
+ * @param {Map} itemsMap - Кэш items (externalId → item)
+ * @param {Map} statusIdCache - Кэш statusId (statusName → uuid)
  */
-async function syncSingleDecompositionStage(wsNestedTask, supaSection, stats, tagMap = null) {
+async function syncSingleDecompositionStage(wsNestedTask, supaSection, stats, tagMap, stagesMap, itemsMap, statusIdCache) {
   try {
-    // Синхронизируем все статусы (active, done, hold, canceled)
     logger.info(`📊 Processing stage: ${wsNestedTask.name} (status: ${wsNestedTask.status})`);
 
-    const externalId = wsNestedTask.id.toString();
+    const externalId = String(wsNestedTask.id);
 
-    // Проверяем существование decomposition_stage
-    const existingStage = await supabase.getDecompositionStageByExternalId(externalId);
+    // Ищем ответственного
+    // userFound — флаг что пользователь найден в кэше
+    let responsibles = [];
+    let userFound = false;
+    if (wsNestedTask.user_to?.email) {
+      const user = userCache.findUser(wsNestedTask.user_to.email, stats);
+      if (user) {
+        responsibles = [user.user_id];
+        userFound = true;
+      }
+    }
+
+    // Ищем существующий этап из кэша вместо запроса к БД
+    const existingStage = stagesMap.get(externalId);
 
     const stageData = {
       decomposition_stage_section_id: supaSection.section_id,
@@ -586,24 +516,38 @@ async function syncSingleDecompositionStage(wsNestedTask, supaSection, stats, ta
       external_id: externalId,
       external_source: 'worksection'
     };
+    // Включаем ответственного только если пользователь найден в кэше
+    if (userFound) {
+      stageData.decomposition_stage_responsibles = responsibles;
+    }
 
     let stage;
 
     if (existingStage) {
-      // UPDATE существующего stage
-      await supabase.updateDecompositionStage(existingStage.decomposition_stage_id, stageData);
-      stats.decomposition_stages.updated++;
-      logger.info(`🔄 Updated decomposition_stage: ${wsNestedTask.name}`);
+      const existingResponsible = (existingStage.decomposition_stage_responsibles || [])[0] || null;
+      const newResponsible = responsibles[0] || null;
 
-      // Добавляем в детальный отчет
-      if (stats.detailed_report) {
-        stats.detailed_report.actions.push({
-          action: 'updated',
-          type: 'decomposition_stage',
-          id: wsNestedTask.id,
-          name: wsNestedTask.name,
-          timestamp: new Date().toISOString()
-        });
+      // Ответственного сравниваем только если пользователь найден в кэше.
+      // Если email есть в WS, но пользователь не найден — не трогаем поле,
+      // чтобы не затереть ранее назначенного ответственного.
+      const responsibleChanged = userFound && existingResponsible !== newResponsible;
+      const hasChanges = existingStage.decomposition_stage_name !== wsNestedTask.name ||
+                         responsibleChanged;
+
+      if (hasChanges) {
+        await supabase.updateDecompositionStage(existingStage.decomposition_stage_id, stageData);
+        stats.decomposition_stages.updated++;
+        logger.info(`🔄 Updated decomposition_stage: ${wsNestedTask.name}`);
+
+        if (stats.detailed_report) {
+          stats.detailed_report.actions.push({
+            action: 'updated', type: 'decomposition_stage',
+            id: wsNestedTask.id, name: wsNestedTask.name, timestamp: new Date().toISOString()
+          });
+        }
+      } else {
+        stats.decomposition_stages.unchanged++;
+        logger.info(`✓ Unchanged decomposition_stage: ${wsNestedTask.name}`);
       }
 
       stage = existingStage;
@@ -614,36 +558,32 @@ async function syncSingleDecompositionStage(wsNestedTask, supaSection, stats, ta
       stats.decomposition_stages.created++;
       logger.success(`✅ Created decomposition_stage: ${wsNestedTask.name}`);
 
-      // Добавляем в детальный отчет
+      // Добавляем в кэш для последующих обращений
+      stagesMap.set(externalId, newStage);
+
       if (stats.detailed_report) {
         stats.detailed_report.actions.push({
-          action: 'created',
-          type: 'decomposition_stage',
-          id: wsNestedTask.id,
-          name: wsNestedTask.name,
-          timestamp: new Date().toISOString()
+          action: 'created', type: 'decomposition_stage',
+          id: wsNestedTask.id, name: wsNestedTask.name, timestamp: new Date().toISOString()
         });
       }
 
       stage = newStage;
     }
 
-    // Синхронизировать статус и % готовности
+    // Синхронизировать статус и % готовности через теги
     if (tagMap && stage) {
-      // Загружаем полную информацию о задаче через get_task для получения тегов
-      // т.к. get_tasks с extra=subtasks не всегда возвращает теги для вложенных задач
       try {
         const fullTaskData = await worksection.getTask(wsNestedTask.id);
         if (fullTaskData && fullTaskData.tags) {
-          // Используем теги из полной загрузки задачи
-          await syncStageStatusAndProgress(stage, fullTaskData, tagMap, stats);
+          await syncStageStatusAndProgress(stage, fullTaskData, tagMap, stats, itemsMap, statusIdCache);
         } else {
           logger.warning(`   ⚠️ No tags found for task ${wsNestedTask.id} via get_task`);
-          await syncStageStatusAndProgress(stage, wsNestedTask, tagMap, stats);
+          await syncStageStatusAndProgress(stage, wsNestedTask, tagMap, stats, itemsMap, statusIdCache);
         }
       } catch (error) {
         logger.warning(`   ⚠️ Failed to load full task data for ${wsNestedTask.id}: ${error.message}`);
-        await syncStageStatusAndProgress(stage, wsNestedTask, tagMap, stats);
+        await syncStageStatusAndProgress(stage, wsNestedTask, tagMap, stats, itemsMap, statusIdCache);
       }
     }
 
@@ -655,12 +595,9 @@ async function syncSingleDecompositionStage(wsNestedTask, supaSection, stats, ta
 
     if (stats.detailed_report) {
       stats.detailed_report.actions.push({
-        action: 'error',
-        type: 'decomposition_stage',
-        id: wsNestedTask.id,
-        name: wsNestedTask.name,
-        timestamp: new Date().toISOString(),
-        error: error.message
+        action: 'error', type: 'decomposition_stage',
+        id: wsNestedTask.id, name: wsNestedTask.name,
+        timestamp: new Date().toISOString(), error: error.message
       });
     }
 
@@ -670,26 +607,22 @@ async function syncSingleDecompositionStage(wsNestedTask, supaSection, stats, ta
 
 /**
  * Синхронизация одной decomposition_item (для OS проектов: вложенные задачи 3-го уровня)
+ * @param {Object} wsNestedTask - Задача из Worksection
+ * @param {Object} stage - decomposition_stage из БД
+ * @param {Object} section - section из БД
+ * @param {Object} stats - Объект статистики
+ * @param {Map} itemsMap - Кэш items (externalId → item)
  */
-async function syncSingleDecompositionItem(wsNestedTask, stage, section, stats) {
+async function syncSingleDecompositionItem(wsNestedTask, stage, section, stats, itemsMap) {
   try {
-    // Синхронизируем все статусы (active, done, hold, canceled)
     logger.info(`📋 Processing item: ${wsNestedTask.name} (status: ${wsNestedTask.status})`);
 
-    const externalId = wsNestedTask.id.toString();
+    const externalId = String(wsNestedTask.id);
 
-    // Проверяем существование decomposition_item
-    const existingItem = await supabase.getDecompositionItemByExternalId(externalId);
+    // Ищем существующую задачу из кэша вместо запроса к БД
+    const existingItem = itemsMap.get(externalId);
 
-    // Получаем кешированные ID констант
     const { categoryId, statusId, difficultyId } = await getCachedIds();
-
-    // Ищем ответственного
-    let responsibleId = null;
-    if (wsNestedTask.user_to?.email) {
-      const user = userCache.findUser(wsNestedTask.user_to.email, stats);
-      if (user) responsibleId = user.user_id;
-    }
 
     const itemData = {
       decomposition_item_section_id: section.section_id,
@@ -700,40 +633,40 @@ async function syncSingleDecompositionItem(wsNestedTask, stage, section, stats) 
       decomposition_item_difficulty_id: difficultyId,
       decomposition_item_planned_hours: 0,
       decomposition_item_order: 1,
-      decomposition_item_responsible: responsibleId,
       external_id: externalId,
       external_source: 'worksection'
     };
 
     if (existingItem) {
-      // UPDATE существующего item
-      await supabase.updateDecompositionItem(existingItem.decomposition_item_id, itemData);
-      stats.decomposition_items.updated++;
-      logger.info(`🔄 Updated decomposition_item: ${wsNestedTask.name}`);
+      // Обновляем только если изменилось название
+      if (existingItem.decomposition_item_description !== wsNestedTask.name) {
+        await supabase.updateDecompositionItem(existingItem.decomposition_item_id, itemData);
+        stats.decomposition_items.updated++;
+        logger.info(`🔄 Updated decomposition_item: ${wsNestedTask.name}`);
 
-      if (stats.detailed_report) {
-        stats.detailed_report.actions.push({
-          action: 'updated',
-          type: 'decomposition_item',
-          id: wsNestedTask.id,
-          name: wsNestedTask.name,
-          timestamp: new Date().toISOString()
-        });
+        if (stats.detailed_report) {
+          stats.detailed_report.actions.push({
+            action: 'updated', type: 'decomposition_item',
+            id: wsNestedTask.id, name: wsNestedTask.name, timestamp: new Date().toISOString()
+          });
+        }
+      } else {
+        stats.decomposition_items.unchanged++;
+        logger.info(`✓ Unchanged decomposition_item: ${wsNestedTask.name}`);
       }
 
     } else {
-      // CREATE нового item
       const newItem = await supabase.createDecompositionItem(itemData);
       stats.decomposition_items.created++;
       logger.success(`✅ Created decomposition_item: ${wsNestedTask.name}`);
 
+      // Добавляем в кэш для последующих обращений
+      if (newItem) itemsMap.set(externalId, newItem);
+
       if (stats.detailed_report) {
         stats.detailed_report.actions.push({
-          action: 'created',
-          type: 'decomposition_item',
-          id: wsNestedTask.id,
-          name: wsNestedTask.name,
-          timestamp: new Date().toISOString()
+          action: 'created', type: 'decomposition_item',
+          id: wsNestedTask.id, name: wsNestedTask.name, timestamp: new Date().toISOString()
         });
       }
     }
@@ -744,12 +677,9 @@ async function syncSingleDecompositionItem(wsNestedTask, stage, section, stats) 
 
     if (stats.detailed_report) {
       stats.detailed_report.actions.push({
-        action: 'error',
-        type: 'decomposition_item',
-        id: wsNestedTask.id,
-        name: wsNestedTask.name,
-        timestamp: new Date().toISOString(),
-        error: error.message
+        action: 'error', type: 'decomposition_item',
+        id: wsNestedTask.id, name: wsNestedTask.name,
+        timestamp: new Date().toISOString(), error: error.message
       });
     }
   }
