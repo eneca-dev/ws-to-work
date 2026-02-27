@@ -206,6 +206,10 @@ async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
   }
 }
 
+function normDate(d) {
+  return d ? d.split('T')[0] : null;
+}
+
 async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
   try {
     let supaProjects = await supabase.getProjectsWithExternalId();
@@ -288,11 +292,11 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
             // Проверяем нужно ли обновление
             const responsible = await findUserByEmail(wsTask.user_to?.email, stats);
             
-            const hasChanges = 
+            const hasChanges =
               existing.section_name !== wsTask.name ||
               existing.section_description !== (wsTask.text || null) ||
-              existing.section_start_date !== (wsTask.date_start || null) ||
-              existing.section_end_date !== (wsTask.date_end || null) ||
+              normDate(existing.section_start_date) !== (wsTask.date_start || null) ||
+              normDate(existing.section_end_date) !== (wsTask.date_end || null) ||
               existing.section_object_id !== placeholderObject.object_id ||
               (responsible && existing.section_responsible !== responsible.user_id) ||
               (!responsible && existing.section_responsible !== null);
@@ -453,11 +457,11 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
             // Проверяем нужно ли обновление
             const responsible = await findUserByEmail(wsSubtask.user_to?.email, stats);
             
-            const hasChanges = 
+            const hasChanges =
               existing.section_name !== wsSubtask.name ||
               existing.section_description !== (wsSubtask.text || null) ||
-              existing.section_start_date !== (wsSubtask.date_start || null) ||
-              existing.section_end_date !== (wsSubtask.date_end || null) ||
+              normDate(existing.section_start_date) !== (wsSubtask.date_start || null) ||
+              normDate(existing.section_end_date) !== (wsSubtask.date_end || null) ||
               existing.section_object_id !== object.object_id ||
               (responsible && existing.section_responsible !== responsible.user_id) ||
               (!responsible && existing.section_responsible !== null);
