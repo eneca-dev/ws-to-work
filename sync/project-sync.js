@@ -65,41 +65,53 @@ async function syncProjects(stats, offset = 0, limit = 3, projectId = null) {
         );
 
         if (existing) {
-          // Update existing project
-          const updateData = {
-            project_name: wsProject.name,
-            project_description: wsProject.description || null,
-            external_updated_at: new Date().toISOString(),
-            stage_type: stageType
-          };
-          
           // Find and assign manager using enhanced search
           // Приоритет: manager -> user_to -> user_from
           const managerEmail = wsProject.manager || wsProject.user_to?.email || wsProject.user_from?.email;
           const manager = await findUserByEmail(managerEmail, stats);
-          if (manager) {
-            updateData.project_manager = manager.user_id;
-            logger.info(`👤 Assigned manager to project "${wsProject.name}": ${manager.first_name} ${manager.last_name} (source: ${wsProject.manager ? 'manager' : wsProject.user_to?.email ? 'user_to' : 'user_from'})`);
+
+          // Dirty-check: обновляем только если данные изменились
+          const hasChanges =
+            existing.project_name !== wsProject.name ||
+            existing.project_description !== (wsProject.description || null) ||
+            existing.stage_type !== stageType ||
+            (manager && existing.project_manager !== manager.user_id);
+
+          if (hasChanges) {
+            const updateData = {
+              project_name: wsProject.name,
+              project_description: wsProject.description || null,
+              external_updated_at: new Date().toISOString(),
+              stage_type: stageType
+            };
+
+            if (manager) {
+              updateData.project_manager = manager.user_id;
+              logger.info(`👤 Assigned manager to project "${wsProject.name}": ${manager.first_name} ${manager.last_name} (source: ${wsProject.manager ? 'manager' : wsProject.user_to?.email ? 'user_to' : 'user_from'})`);
+            }
+
+            await supabase.updateProject(existing.project_id, updateData);
+            stats.projects.updated++;
+
+            // Добавляем детальную информацию в отчет
+            if (!stats.detailed_report) stats.detailed_report = { actions: [] };
+            stats.detailed_report.actions.push({
+              action: 'updated',
+              type: 'project',
+              id: wsProject.id,
+              name: wsProject.name,
+              timestamp: new Date().toISOString(),
+              sync_type: syncType,
+              stage_type: stageType,
+              manager_assigned: !!manager,
+              manager_info: manager ? `${manager.first_name} ${manager.last_name} (${manager.email})` : null
+            });
+
+            logger.success(`Updated project: ${wsProject.name}`);
+          } else {
+            stats.projects.unchanged++;
+            logger.info(`✅ Project unchanged: ${wsProject.name}`);
           }
-          
-          await supabase.updateProject(existing.project_id, updateData);
-          stats.projects.updated++;
-          
-          // Добавляем детальную информацию в отчет
-          if (!stats.detailed_report) stats.detailed_report = { actions: [] };
-          stats.detailed_report.actions.push({
-            action: 'updated',
-            type: 'project',
-            id: wsProject.id,
-            name: wsProject.name,
-            timestamp: new Date().toISOString(),
-            sync_type: syncType,
-            stage_type: stageType,
-            manager_assigned: !!manager,
-            manager_info: manager ? `${manager.first_name} ${manager.last_name} (${manager.email})` : null
-          });
-          
-          logger.success(`Updated project: ${wsProject.name}`);
           
         } else {
           // Create new project

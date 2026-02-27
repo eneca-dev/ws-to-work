@@ -5,7 +5,45 @@ const validator = require('../utils/validator');
 
 class SupabaseService {
   constructor() {
-    this.client = createClient(config.supabase.url, config.supabase.key);
+    this._queryCount = 0;
+    const rawClient = createClient(config.supabase.url, config.supabase.key);
+    // Считаем каждый вызов .from() = один HTTP-запрос к Supabase
+    const self = this;
+    this.client = new Proxy(rawClient, {
+      get(target, prop) {
+        if (prop === 'from') {
+          return (table) => {
+            self._queryCount++;
+            return target.from(table);
+          };
+        }
+        return typeof target[prop] === 'function' ? target[prop].bind(target) : target[prop];
+      }
+    });
+  }
+
+  resetQueryCount() {
+    this._queryCount = 0;
+  }
+
+  // Загружает все строки таблицы постранично, обходя лимит PostgREST
+  async _fetchAllPages(builderFn) {
+    const PAGE_SIZE = 1000;
+    const allData = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await builderFn().range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      allData.push(...data);
+      if (data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+    return allData;
+  }
+
+  getQueryCount() {
+    return this._queryCount;
   }
   
   // Projects
@@ -246,12 +284,9 @@ class SupabaseService {
   // Sections
   async getSections() {
     try {
-      const { data, error } = await this.client
-        .from('sections')
-        .select('*');
-      
-      if (error) throw error;
-      return data || [];
+      return await this._fetchAllPages(() =>
+        this.client.from('sections').select('*')
+      );
     } catch (error) {
       logger.error(`Error getting sections: ${error.message}`);
       throw error;
@@ -633,6 +668,17 @@ class SupabaseService {
     }
   }
 
+  async getDecompositionStages() {
+    try {
+      return await this._fetchAllPages(() =>
+        this.client.from('decomposition_stages').select('*').eq('external_source', 'worksection')
+      );
+    } catch (error) {
+      logger.error(`Error getting decomposition_stages: ${error.message}`);
+      throw error;
+    }
+  }
+
   async createDecompositionStage(data) {
     try {
       const { data: result, error } = await this.client
@@ -704,6 +750,17 @@ class SupabaseService {
     }
   }
 
+  async getDecompositionItems() {
+    try {
+      return await this._fetchAllPages(() =>
+        this.client.from('decomposition_items').select('*').eq('external_source', 'worksection')
+      );
+    } catch (error) {
+      logger.error(`Error getting decomposition_items: ${error.message}`);
+      throw error;
+    }
+  }
+
   async createDecompositionItem(data) {
     try {
       const { data: result, error } = await this.client
@@ -740,6 +797,21 @@ class SupabaseService {
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // WORK LOGS
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  async getWorkLogs() {
+    try {
+      const { data, error } = await this.client
+        .from('work_logs')
+        .select('*')
+        .eq('external_source', 'worksection');
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      logger.error(`Error getting work_logs: ${error.message}`);
+      throw error;
+    }
+  }
 
   async getWorkLogByExternalId(externalId) {
     try {
@@ -844,6 +916,21 @@ class SupabaseService {
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // BUDGETS
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  async getBudgets() {
+    try {
+      const { data, error } = await this.client
+        .from('budgets')
+        .select('*')
+        .eq('entity_type', 'decomposition_item');
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      logger.error(`Error getting budgets: ${error.message}`);
+      throw error;
+    }
+  }
 
   async getBudgetForDecompositionItem(decompositionItemId) {
     try {

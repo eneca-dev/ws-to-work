@@ -125,8 +125,9 @@ async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
           );
 
           if (existingObject) {
-            // Обновляем если изменилось название
-            if (existingObject.object_name !== taskGroup.name) {
+            // Обновляем если изменились название или описание
+            if (existingObject.object_name !== taskGroup.name ||
+                existingObject.object_description !== (taskGroup.text || '')) {
               const updateData = {
                 object_name: taskGroup.name,
                 object_description: taskGroup.text || '',
@@ -453,11 +454,13 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
             // Проверяем нужно ли обновление
             const responsible = await findUserByEmail(wsSubtask.user_to?.email, stats);
             
-            const hasChanges = 
+            // Нормализуем даты к YYYY-MM-DD (Supabase может вернуть timestamp "2025-01-15T00:00:00+00:00")
+            const normDate = d => d ? d.split('T')[0] : null;
+            const hasChanges =
               existing.section_name !== wsSubtask.name ||
               existing.section_description !== (wsSubtask.text || null) ||
-              existing.section_start_date !== (wsSubtask.date_start || null) ||
-              existing.section_end_date !== (wsSubtask.date_end || null) ||
+              normDate(existing.section_start_date) !== (wsSubtask.date_start || null) ||
+              normDate(existing.section_end_date) !== (wsSubtask.date_end || null) ||
               existing.section_object_id !== object.object_id ||
               (responsible && existing.section_responsible !== responsible.user_id) ||
               (!responsible && existing.section_responsible !== null);

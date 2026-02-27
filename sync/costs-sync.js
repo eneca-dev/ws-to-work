@@ -102,6 +102,29 @@ async function syncCosts(stats, offset = 0, limit = 7, projectId = null, costsMo
     // Применяем пагинацию
     const paginatedProjects = projectId ? filteredProjects : filteredProjects.slice(offset, offset + limit);
 
+    // ⚡ ОПТИМИЗАЦИЯ: загружаем все данные один раз вместо N+1 запросов
+    const [allWorkLogs, allItems, allStages, allBudgets] = await Promise.all([
+      supabase.getWorkLogs(),
+      supabase.getDecompositionItems(),
+      supabase.getDecompositionStages(),
+      supabase.getBudgets()
+    ]);
+
+    // String() защищает от type mismatch: если external_id в БД bigint → вернётся число, Map.get("123") ≠ Map.get(123)
+    const workLogsMap = new Map(allWorkLogs.map(w => [String(w.external_id), w]));
+    const workLogsByBudgetId = new Map();
+    for (const wl of allWorkLogs) {
+      if (!workLogsByBudgetId.has(wl.budget_id)) workLogsByBudgetId.set(wl.budget_id, []);
+      workLogsByBudgetId.get(wl.budget_id).push(wl);
+    }
+    const itemsMap = new Map(allItems.map(i => [String(i.external_id), i]));
+    const stagesMap = new Map(allStages.map(s => [String(s.external_id), s]));
+    const budgetsMap = new Map(allBudgets.map(b => [b.entity_id, b]));
+
+    logger.info(`⚡ Pre-loaded: ${allWorkLogs.length} work_logs, ${allItems.length} items, ${allStages.length} stages, ${allBudgets.length} budgets`);
+
+    const ctx = { workLogsMap, workLogsByBudgetId, itemsMap, stagesMap, budgetsMap };
+
     for (const wsProject of paginatedProjects) {
       try {
         logger.info(`💰 Syncing costs for project: ${wsProject.name} (ID: ${wsProject.id})`);
@@ -151,7 +174,7 @@ async function syncCosts(stats, offset = 0, limit = 7, projectId = null, costsMo
         // (Бюджет проверяется и обновляется индивидуально перед каждым work_log)
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         for (const cost of wsCosts) {
-          await syncSingleCost(cost, stats);
+          await syncSingleCost(cost, stats, ctx);
         }
 
       } catch (error) {
@@ -232,17 +255,17 @@ async function detectOrphanWorkLogs(wsProject, wsCostIdsSet, stats) {
  * Находит или создает decomposition_item для отчета
  * ℹ️ decomposition_items создаются ТОЛЬКО когда есть отчет на них
  */
-async function findOrCreateDecompositionItem(cost, stats) {
+async function findOrCreateDecompositionItem(cost, stats, ctx) {
   const taskId = cost.task.id.toString();
 
-  // 1. Проверяем существование item
-  let item = await supabase.getDecompositionItemByExternalId(taskId);
+  // 1. Проверяем существование item (из кэша)
+  let item = ctx.itemsMap.get(taskId);
   if (item) {
     return item; // Уже существует
   }
 
-  // 2. Находим decomposition_stage (должен существовать после stage-sync!)
-  const stage = await supabase.getDecompositionStageByExternalId(taskId);
+  // 2. Находим decomposition_stage (из кэша)
+  const stage = ctx.stagesMap.get(taskId);
   if (!stage) {
     logger.error(`❌ Decomposition stage not found for task ${taskId} (${cost.task.name})`);
     logger.error(`   Stage должен быть создан в stage-sync.js перед синхронизацией отчетов`);
@@ -284,6 +307,9 @@ async function findOrCreateDecompositionItem(cost, stats) {
   item = await supabase.createDecompositionItem(itemData);
   stats.decomposition_items.created++;
 
+  // Добавляем в кэш для последующих обращений
+  ctx.itemsMap.set(taskId, item);
+
   logger.success(`✅ Created decomposition_item for cost: ${cost.task.name} - задача`);
 
   return item;
@@ -292,14 +318,14 @@ async function findOrCreateDecompositionItem(cost, stats) {
 /**
  * Синхронизация одного cost → work_log
  */
-async function syncSingleCost(cost, stats) {
+async function syncSingleCost(cost, stats, ctx) {
   try {
     const externalId = cost.id.toString();
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 1. ДЕДУПЛИКАЦИЯ: Проверить существование work_log
+    // 1. ДЕДУПЛИКАЦИЯ: Проверить существование work_log (из кэша)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const existingLog = await supabase.getWorkLogByExternalId(externalId);
+    const existingLog = ctx.workLogsMap.get(externalId);
 
     if (existingLog) {
       logger.info(`⏭️ Work log already exists for cost ${externalId}, skipping`);
@@ -310,7 +336,7 @@ async function syncSingleCost(cost, stats) {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // 2. Найти или создать decomposition_item
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const item = await findOrCreateDecompositionItem(cost, stats);
+    const item = await findOrCreateDecompositionItem(cost, stats, ctx);
 
     if (!item) {
       logger.warning(`⚠️ Failed to find or create decomposition_item, skipping cost ${externalId}`);
@@ -356,7 +382,7 @@ async function syncSingleCost(cost, stats) {
       return;
     }
 
-    const user = await supabase.findUser(userEmail, stats);
+    const user = userCache.findUser(userEmail, stats);
     if (!user) {
       logger.warning(`⚠️ User not found: ${userEmail}, skipping cost ${externalId}`);
       stats.work_logs.skipped++;
@@ -388,9 +414,13 @@ async function syncSingleCost(cost, stats) {
     const hourlyRate = hours > 0 ? costAmount / hours : 0;
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // 5. Получить budget_id
+    // 5. Получить budget_id (из кэша; для новых items — fallback к БД)
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const budget = await supabase.getBudgetForDecompositionItem(item.decomposition_item_id);
+    let budget = ctx.budgetsMap.get(item.decomposition_item_id);
+    if (!budget) {
+      budget = await supabase.getBudgetForDecompositionItem(item.decomposition_item_id);
+      if (budget) ctx.budgetsMap.set(item.decomposition_item_id, budget);
+    }
     if (!budget) {
       logger.error(`❌ Budget not found for decomposition_item ${item.decomposition_item_id}`);
       stats.work_logs.errors++;
@@ -402,8 +432,8 @@ async function syncSingleCost(cost, stats) {
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const currentBudget = parseFloat(budget.total_amount);
 
-    // Получаем все существующие work_logs для этого бюджета
-    const existingWorkLogs = await supabase.getWorkLogsByBudget(budget.budget_id);
+    // Получаем все существующие work_logs для этого бюджета (из кэша)
+    const existingWorkLogs = ctx.workLogsByBudgetId.get(budget.budget_id) || [];
 
     // Считаем сумму уже потраченных денег
     const spentAmount = existingWorkLogs.reduce((sum, log) => sum + parseFloat(log.work_log_amount || 0), 0);
@@ -414,9 +444,12 @@ async function syncSingleCost(cost, stats) {
     // Если требуемая сумма больше текущего бюджета - увеличиваем бюджет
     if (requiredAmount > currentBudget) {
       const deficit = requiredAmount - currentBudget;
-      await supabase.updateBudget(budget.budget_id, {
+      const updatedBudget = await supabase.updateBudget(budget.budget_id, {
         total_amount: requiredAmount
       });
+
+      // Обновляем кэш бюджета чтобы следующие costs видели актуальную сумму
+      ctx.budgetsMap.set(item.decomposition_item_id, updatedBudget);
 
       logger.info(`💵 Budget increased for task ${cost.task.id}: ${currentBudget} → ${requiredAmount} (added ${deficit.toFixed(2)} for new work_log)`);
       stats.budgets.updated++;
@@ -439,8 +472,14 @@ async function syncSingleCost(cost, stats) {
       external_source: 'worksection'
     };
 
-    await supabase.createWorkLog(workLogData);
+    const newWorkLog = await supabase.createWorkLog(workLogData);
     stats.work_logs.created++;
+
+    // Добавляем в кэши для корректного расчёта бюджета последующих costs
+    ctx.workLogsMap.set(externalId, newWorkLog);
+    const budgetLogs = ctx.workLogsByBudgetId.get(budget.budget_id) || [];
+    budgetLogs.push(newWorkLog);
+    ctx.workLogsByBudgetId.set(budget.budget_id, budgetLogs);
 
     logger.success(`✅ Created work_log for cost ${externalId}: ${cost.comment || 'No comment'} (${hours}h × ${hourlyRate.toFixed(2)}/h = ${costAmount.toFixed(2)})`);
 

@@ -95,27 +95,35 @@ class SyncManager {
 
       // Clear previous stats
       this.resetStats();
+      supabaseService.resetQueryCount();
 
       // Step 1: Sync projects (включая stage_type из тегов)
       logger.info('📋 Step 1/5: Syncing projects');
       await syncProjects(this.stats, offset, limit, projectId);
+      logger.info(`🔢 DB queries after step 1 (projects): ${supabaseService.getQueryCount()}`);
 
       // Step 2: Sync objects
       logger.info('📦 Step 2/5: Syncing objects');
       await syncObjects(this.stats, offset, limit, projectId);
+      logger.info(`🔢 DB queries after step 2 (objects): ${supabaseService.getQueryCount()}`);
 
       // Step 3: Sync sections
       logger.info('📑 Step 3/5: Syncing sections');
       await syncSections(this.stats, offset, limit, projectId);
+      logger.info(`🔢 DB queries after step 3 (sections): ${supabaseService.getQueryCount()}`);
 
       // Step 4: Sync decomposition stages (3rd level nested tasks)
       logger.info('📊 Step 4/5: Syncing decomposition stages');
       await syncDecompositionStages(this.stats, offset, limit, projectId);
+      logger.info(`🔢 DB queries after step 4 (stages): ${supabaseService.getQueryCount()}`);
 
       // Step 5: Sync costs → work_logs
       logger.info('💰 Step 5/5: Syncing costs (work_logs)');
       await syncCosts(this.stats, offset, limit, projectId, costsMode, costsDate);
-      
+
+      const totalQueries = supabaseService.getQueryCount();
+      logger.info(`🔢 TOTAL DB queries this sync: ${totalQueries}`);
+
       const duration = Date.now() - startTime;
       const endTime = new Date();
       logger.success(`✅ Full synchronization completed in ${duration}ms`);
@@ -149,6 +157,7 @@ class SyncManager {
 
       // Send logs to Telegram
       const telegramStats = {
+        totalDbQueries: supabaseService.getQueryCount(),
         projectsCreated: this.stats.projects.created,
         projectsUpdated: this.stats.projects.updated,
         objectsCreated: this.stats.objects.created,
@@ -166,6 +175,9 @@ class SyncManager {
         defaultTasksCreated: this.stats.decomposition_items.default_tasks_created,
         defaultTasksFound: this.stats.decomposition_items.default_tasks_found,
         taskProgressUpdated: this.stats.decomposition_items.progress_updated,
+        sectionsUnchanged: this.stats.sections.unchanged,
+        stagesUnchanged: this.stats.decomposition_stages.unchanged,
+        itemsUnchanged: this.stats.decomposition_items.unchanged,
         workLogsCreated: this.stats.work_logs.created,
         workLogsSkipped: this.stats.work_logs.skipped,
         budgetsUpdated: this.stats.budgets.updated,
@@ -410,6 +422,33 @@ class SyncManager {
       `${this.stats.budgets.updated} updated, ` +
       `${this.stats.budgets.errors} errors`
     );
+
+    // ⚡ Сводка мутаций в БД — каждая из них триггерит Realtime
+    const rtSections = this.stats.sections.created + this.stats.sections.updated;
+    const rtStages = this.stats.decomposition_stages.created +
+                     this.stats.decomposition_stages.updated +
+                     this.stats.decomposition_stages.status_synced;
+    const rtItems  = this.stats.decomposition_items.created +
+                     this.stats.decomposition_items.updated +
+                     this.stats.decomposition_items.progress_updated;
+    const rtTotal  = rtSections + rtStages + rtItems;
+    logger.info('');
+    logger.info('⚡ === REALTIME DB MUTATIONS (INSERT + UPDATE sent to Supabase) ===');
+    logger.info(`📑 sections:              ${rtSections.toString().padStart(4)}  ` +
+      `(${this.stats.sections.created} created + ${this.stats.sections.updated} updated)`);
+    logger.info(`📊 decomposition_stages:  ${rtStages.toString().padStart(4)}  ` +
+      `(${this.stats.decomposition_stages.created} created + ` +
+      `${this.stats.decomposition_stages.updated} updated + ` +
+      `${this.stats.decomposition_stages.status_synced} status_patched)`);
+    logger.info(`📋 decomposition_items:   ${rtItems.toString().padStart(4)}  ` +
+      `(${this.stats.decomposition_items.created} created + ` +
+      `${this.stats.decomposition_items.updated} updated + ` +
+      `${this.stats.decomposition_items.progress_updated} progress_patched)`);
+    logger.info(`🔢 TOTAL Realtime events: ${rtTotal}`);
+    logger.info(`✅ Unchanged (no Realtime): ` +
+      `sections ${this.stats.sections.unchanged}, ` +
+      `stages ${this.stats.decomposition_stages.unchanged}, ` +
+      `items ${this.stats.decomposition_items.unchanged}`);
 
     if (this.stats.orphan_work_logs.total > 0) {
       logger.warning(`⚠️ Orphan Work Logs: ${this.stats.orphan_work_logs.total} found (exist in Supabase but NOT in Worksection)`);

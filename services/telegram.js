@@ -45,6 +45,7 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   csv += '\n';
 
   csv += 'STATISTICS\n';
+  csv += `Total DB Queries,${stats.totalDbQueries || 0}\n`;
   csv += `Projects Created,${stats.projectsCreated || 0}\n`;
   csv += `Projects Updated,${stats.projectsUpdated || 0}\n`;
   csv += `Objects Created,${stats.objectsCreated || 0}\n`;
@@ -68,6 +69,20 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   csv += `Budget Total Increase,${stats.budgetTotalIncrease ? stats.budgetTotalIncrease.toFixed(2) : '0.00'}\n`;
   csv += `Orphan Work Logs,${stats.orphanWorkLogs || 0}\n`;
   csv += `Total Errors,${stats.errors || 0}\n`;
+  csv += '\n';
+
+  // Realtime mutations — каждая строка = одно Realtime-событие
+  const rtSections = (stats.sectionsCreated || 0) + (stats.sectionsUpdated || 0);
+  const rtStages   = (stats.stagesCreated || 0) + (stats.stagesUpdated || 0) + (stats.stagesStatusSynced || 0);
+  const rtItems    = (stats.itemsCreated || 0) + (stats.itemsUpdated || 0) + (stats.taskProgressUpdated || 0);
+  csv += 'REALTIME DB MUTATIONS\n';
+  csv += `Sections (INSERT+UPDATE),${rtSections}\n`;
+  csv += `Sections Unchanged (no Realtime),${stats.sectionsUnchanged || 0}\n`;
+  csv += `Decomposition Stages (INSERT+UPDATE+status),${rtStages}\n`;
+  csv += `Decomposition Stages Unchanged (no Realtime),${stats.stagesUnchanged || 0}\n`;
+  csv += `Decomposition Items (INSERT+UPDATE+progress),${rtItems}\n`;
+  csv += `Decomposition Items Unchanged (no Realtime),${stats.itemsUnchanged || 0}\n`;
+  csv += `Total Realtime Events,${rtSections + rtStages + rtItems}\n`;
   csv += '\n';
 
   // Секция ERROR DETAILS

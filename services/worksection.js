@@ -30,9 +30,6 @@ class WorksectionService {
       // Формируем полный URL
       const url = `${this.baseUrl}?${queryParams.toString()}`;
       
-      logger.info(`Worksection API: ${action}`);
-      logger.info(`Request URL: ${url.replace(/hash=[^&]+/, 'hash=***')}`); // Скрываем хеш в логах
-      
       // Делаем GET запрос
       const response = await axios.get(url);
       
@@ -50,21 +47,7 @@ class WorksectionService {
   
   async getProjects() {
     const data = await this.request('get_projects');
-    const projects = data.data || [];
-    
-    // Отладочная информация о первом проекте
-    if (projects.length > 0) {
-      const firstProject = projects[0];
-      logger.info(`Sample project structure: ${JSON.stringify({
-        id: firstProject.id,
-        name: firstProject.name,
-        tags: firstProject.tags,
-        tagsType: typeof firstProject.tags,
-        isArray: Array.isArray(firstProject.tags)
-      })}`);
-    }
-    
-    return projects;
+    return data.data || [];
   }
   
   async getProjectTasks(projectId) {
