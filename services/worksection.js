@@ -7,45 +7,64 @@ class WorksectionService {
   constructor() {
     this.baseUrl = `https://${config.worksection.domain}/api/admin/v2/`;
     this.apiKey = config.worksection.hash; // Это теперь API ключ, а не готовый хеш
+    // Кэш задач проекта: projectId → { data, expiresAt }
+    this._tasksCache = new Map();
+    this._tasksCacheTtlMs = 15 * 60 * 1000; // 15 минут
   }
-  
+
   // Формирование MD5 хеша согласно документации
   generateHash(queryParams) {
     const hashInput = queryParams + this.apiKey;
     return crypto.MD5(hashInput).toString();
   }
-  
+
   async request(action, params = {}) {
-    try {
-      // Формируем query параметры
-      const queryParams = new URLSearchParams({ action, ...params });
-      const queryString = queryParams.toString();
-      
-      // Генерируем хеш из query параметров + API ключ
-      const hash = this.generateHash(queryString);
-      
-      // Добавляем хеш к query параметрам
-      queryParams.append('hash', hash);
-      
-      // Формируем полный URL
-      const url = `${this.baseUrl}?${queryParams.toString()}`;
-      
-      logger.info(`Worksection API: ${action}`);
-      logger.info(`Request URL: ${url.replace(/hash=[^&]+/, 'hash=***')}`); // Скрываем хеш в логах
-      
-      // Делаем GET запрос
-      const response = await axios.get(url);
-      
-      if (response.data.status !== 'ok') {
-        throw new Error(response.data.message || 'Unknown API error');
+    const maxRetries = config.sync.maxRetries;
+    let lastError;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // Формируем query параметры
+        const queryParams = new URLSearchParams({ action, ...params });
+        const queryString = queryParams.toString();
+
+        // Генерируем хеш из query параметров + API ключ
+        const hash = this.generateHash(queryString);
+
+        // Добавляем хеш к query параметрам
+        queryParams.append('hash', hash);
+
+        // Формируем полный URL
+        const url = `${this.baseUrl}?${queryParams.toString()}`;
+
+        logger.info(`Worksection API: ${action}`);
+        logger.info(`Request URL: ${url.replace(/hash=[^&]+/, 'hash=***')}`); // Скрываем хеш в логах
+
+        // Делаем GET запрос
+        const response = await axios.get(url);
+
+        if (response.data.status !== 'ok') {
+          throw new Error(response.data.message || 'Unknown API error');
+        }
+
+        return response.data;
+
+      } catch (error) {
+        const isTooManyRequests = error.message && error.message.includes('Too many requests');
+
+        if (!isTooManyRequests || attempt === maxRetries) {
+          logger.error(`Worksection API error: ${error.message}`);
+          throw error;
+        }
+
+        const delayMs = Math.pow(2, attempt) * 1000;
+        logger.warning(`⚠️ Worksection rate limit (attempt ${attempt + 1}/${maxRetries}), повтор через ${delayMs / 1000}с...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        lastError = error;
       }
-      
-      return response.data;
-      
-    } catch (error) {
-      logger.error(`Worksection API error: ${error.message}`);
-      throw error;
     }
+
+    throw lastError;
   }
   
   async getProjects() {
@@ -68,11 +87,27 @@ class WorksectionService {
   }
   
   async getProjectTasks(projectId) {
+    const key = projectId.toString();
+    const cached = this._tasksCache.get(key);
+
+    if (cached && Date.now() < cached.expiresAt) {
+      logger.info(`Worksection API: get_tasks [cached] project=${key}`);
+      return cached.data;
+    }
+
     const data = await this.request('get_tasks', {
       id_project: projectId,
       extra: 'subtasks'
     });
-    return data.data || [];
+    const tasks = data.data || [];
+
+    this._tasksCache.set(key, { data: tasks, expiresAt: Date.now() + this._tasksCacheTtlMs });
+    return tasks;
+  }
+
+  // Очищает кэш задач (вызывается после завершения синхронизации)
+  clearTasksCache() {
+    this._tasksCache.clear();
   }
 
   /**
