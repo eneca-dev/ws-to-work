@@ -2,6 +2,9 @@ const worksection = require('../services/worksection');
 const supabase = require('../services/supabase');
 const logger = require('../utils/logger');
 const userCache = require('../services/user-cache');
+const { config } = require('../config/env');
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
   try {
@@ -103,7 +106,8 @@ async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
         // Стандартные проекты: используем существующую логику с task groups
         logger.info(`📦 Standard Project: Processing task groups for ${project.project_name}`);
 
-        // Получаем задачи проекта из Worksection
+        // Получаем задачи проекта из Worksection (с задержкой для соблюдения rate limit)
+        await sleep(config.sync.delayMs);
         const wsTasks = await worksection.getProjectTasks(project.external_id);
 
         // Фильтруем Task Groups (задачи с подзадачами) и не начинающиеся с "!"
@@ -252,9 +256,10 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
       const syncType = worksection.determineProjectSyncType(wsProject);
       logger.info(`📑 Project "${project.project_name}" sync type: ${syncType}`);
       
-      // Получаем задачи проекта из Worksection
+      // Получаем задачи проекта из Worksection (кэш вернёт результат без HTTP-запроса если syncObjects уже запрашивал)
+      await sleep(config.sync.delayMs);
       const wsTasks = await worksection.getProjectTasks(project.external_id);
-      
+
       // Логика зависит от типа синхронизации
       if (syncType === 'os') {
         // OS проекты: обрабатываем ВСЕ активные задачи как разделы (не подзадачи)

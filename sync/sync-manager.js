@@ -187,6 +187,7 @@ class SyncManager {
       if (!projectId) {  // Только при полной синхронизации
         userCache.clear();
         clearTagCache();
+        worksectionService.clearTasksCache();
       }
 
       return {
@@ -202,6 +203,7 @@ class SyncManager {
       // ✨ Очищаем кэши при ошибке
       userCache.clear();
       clearTagCache();
+      worksectionService.clearTasksCache();
 
       logger.error(`❌ Full synchronization failed: ${error.message}`);
 
