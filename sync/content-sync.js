@@ -122,11 +122,30 @@ async function syncObjects(stats, offset = 0, limit = 3, projectId = null) {
           logger.info(`📦 Processing task group: ${taskGroup.name} (status: ${taskGroup.status})`);
 
           // Проверяем существующий объект для этого проекта
-          const existingObject = existingObjects.find(obj =>
+          let existingObject = existingObjects.find(obj =>
             obj.external_id === taskGroup.id.toString() &&
             obj.external_source === 'worksection' &&
             obj.object_project_id === project.project_id
           );
+
+          // Fallback: ищем объект-сироту с NULL project_id и усыновляем его
+          if (!existingObject) {
+            const orphan = existingObjects.find(obj =>
+              obj.external_id === taskGroup.id.toString() &&
+              obj.external_source === 'worksection' &&
+              obj.object_project_id === null
+            );
+            if (orphan) {
+              try {
+                await supabase.updateObject(orphan.object_id, { object_project_id: project.project_id });
+                orphan.object_project_id = project.project_id; // обновляем локальный кэш
+                existingObject = orphan;
+                logger.info(`🔧 Adopted orphan object: ${orphan.object_name} → project ${project.project_name}`);
+              } catch (error) {
+                logger.error(`Failed to adopt orphan object ${orphan.object_name}: ${error.message}`);
+              }
+            }
+          }
 
           if (existingObject) {
             // Обновляем если изменилось название
@@ -272,11 +291,11 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
 
         logger.info(`Found ${allTasks.length} tasks for OS project ${project.project_name} (all statuses included)`);
         
-        // Находим объект-заглушку для этого проекта
-        const placeholderObject = existingObjects.find(obj => 
+        // Находим объект-заглушку для этого проекта (точное совпадение)
+        const placeholderObject = existingObjects.find(obj =>
           obj.external_source === 'worksection-os' &&
-          obj.external_id.includes(project.external_id + '_') &&
-          obj.external_id.includes('_placeholder')
+          obj.external_id === project.external_id + '_placeholder' &&
+          obj.object_project_id === project.project_id
         );
         
         if (!placeholderObject) {
@@ -426,9 +445,11 @@ async function syncSections(stats, offset = 0, limit = 3, projectId = null) {
         // Синхронизируем все статусы (active, done, hold, canceled)
         logger.info(`📦 Processing task group: ${taskGroup.name} (status: ${taskGroup.status})`);
 
-        // Находим соответствующий объект в БД
-        const object = existingObjects.find(obj => 
-          obj.external_id && obj.external_id.toString() === taskGroup.id.toString()
+        // Находим соответствующий объект в БД (строго по проекту и источнику)
+        const object = existingObjects.find(obj =>
+          obj.external_id && obj.external_id.toString() === taskGroup.id.toString() &&
+          obj.external_source === 'worksection' &&
+          obj.object_project_id === project.project_id
         );
         
         if (!object) {
