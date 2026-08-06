@@ -10,6 +10,13 @@ const TIMEZONE = 'Europe/Minsk';
 let syncInProgress = false;
 
 /**
+ * Обработчики, которые запускаются ПОСЛЕ окончания основной синхронизации.
+ * Регистрируются через onSyncFinished(). Нужны, чтобы смежные синхронизации
+ * (например task-report) шли следом, а не параллельно.
+ */
+const afterSyncHooks = [];
+
+/**
  * Проверяет, является ли сегодня выходным днём (суббота или воскресенье)
  * @returns {boolean} true если выходной
  */
@@ -48,7 +55,7 @@ async function runScheduledSync() {
   }
 
   if (isWeekendDay) {
-    logger.info(`📅 ${timeString} — выходной день: запуск синхронизации в 6:00 с отчетами за вчера`);
+    logger.info(`📅 ${timeString} — выходной день: запуск синхронизации в 6:00 (без отчётов)`);
   }
 
   // Защита от наложения синхронизаций
@@ -57,23 +64,39 @@ async function runScheduledSync() {
     return;
   }
 
-  // Определяем режим синхронизации отчётов: только в 6:00
-  const costsMode = (currentHour === 6) ? 'daily' : 'skip';
+  // Синхронизация отчётов (work_logs) отключена по расписанию — всегда 'skip'.
+  // Ранее в 6:00 запускался режим 'daily', но фактически work_logs не пополнялись
+  // с 30.04.2026. Запустить вручную по-прежнему можно через POST /api/sync
+  // с телом { "costs_mode": "daily" | "full" | "date" }.
+  const costsMode = 'skip';
 
   logger.info(`⏰ Запуск автоматической синхронизации в ${timeString}`);
   logger.info(`📊 Параметры: offset=0, limit=999, costsMode=${costsMode}${costsMode === 'daily' ? ' (отчёты за вчера)' : ' (без отчётов)'}`);
 
   syncInProgress = true;
+  let succeeded = false;
 
   try {
     // Запускаем синхронизацию (отчёты только в 6:00)
     await syncManager.fullSync(0, 999, true, null, costsMode);
+    succeeded = true;
     logger.success('✅ Автоматическая синхронизация завершена успешно');
   } catch (error) {
     logger.error(`❌ Ошибка автоматической синхронизации: ${error.message}`);
     console.error(error.stack);
   } finally {
     syncInProgress = false;
+  }
+
+  // Хуки «после основной синхронизации». Запускаются, когда флаг уже снят,
+  // чтобы подписчик не увидел синхронизацию как ещё идущую.
+  // Ошибка в хуке не влияет ни на основную синхронизацию, ни на другие хуки.
+  for (const hook of afterSyncHooks) {
+    try {
+      await hook({ succeeded });
+    } catch (error) {
+      logger.error(`❌ Хук после синхронизации упал: ${error.message}`);
+    }
   }
 }
 
@@ -114,8 +137,30 @@ function getScheduleInfo() {
   };
 }
 
+/**
+ * Идёт ли сейчас основная синхронизация.
+ * Нужно синхронизации отчёта (task-report/scheduler.js), чтобы не стартовать
+ * поверх неё и не конкурировать за лимиты Worksection API.
+ */
+function isSyncInProgress() {
+  return syncInProgress;
+}
+
+/**
+ * Подписаться на окончание основной синхронизации.
+ * Обработчик получает { succeeded } и выполняется последовательно,
+ * когда флаг syncInProgress уже снят.
+ *
+ * @param {(result: {succeeded: boolean}) => Promise<void>} handler
+ */
+function onSyncFinished(handler) {
+  afterSyncHooks.push(handler);
+}
+
 module.exports = {
   initScheduler,
   getScheduleInfo,
-  runScheduledSync
+  runScheduledSync,
+  isSyncInProgress,
+  onSyncFinished
 };

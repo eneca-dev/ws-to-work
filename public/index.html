@@ -159,8 +159,28 @@
             </div>
         </div>
         
+        <!-- Отчёт по задачам Worksection — отдельная синхронизация, см. task-report/ -->
+        <div class="sync-controls" style="border-top: 2px solid #e9ecef; margin-top: 10px; padding-top: 15px;">
+            <div style="width: 100%; margin-bottom: 8px; font-weight: 600; color: #495057;">
+                📋 Отчёт по задачам
+                <span style="font-weight: 400; color: #6c757d; font-size: 13px;">
+                    — отдельная таблица ws_task_report, запускается автоматически после основной синхронизации
+                </span>
+            </div>
+            <button class="sync-button" id="reportSyncBtn" onclick="startReportSync()">Синхронизировать отчёт</button>
+            <div class="project-input">
+                <span style="padding: 8px 12px; background: #e9ecef; border-radius: 4px; font-size: 14px;">
+                    Отдел: <strong>КР гражд</strong>
+                </span>
+                <input type="text" id="reportProjectId" placeholder="Project ID (необязательно)" style="width: 160px;" />
+            </div>
+            <div class="costs-mode-selector">
+                <span id="reportStatus" style="color: #6c757d; font-size: 13px;">—</span>
+            </div>
+        </div>
+
         <div id="status"></div>
-        
+
         <div class="stats" id="stats" style="display: none;">
             <div class="stat-card">
                 <div class="stat-number created" id="created">0</div>
@@ -343,10 +363,100 @@
             }
             startSync(projectId);
         }
-        
+
+        // ── Отчёт по задачам (отдельная синхронизация) ──────────────────────
+        // Эндпоинт отвечает сразу, работа идёт в фоне — соединение не висит
+        // и не рвётся по таймауту. Прогресс тянем из /api/task-report/status.
+
+        let isReportRunning = false;
+
+        function finishReportRun() {
+            isReportRunning = false;
+            const btn = document.getElementById('reportSyncBtn');
+            btn.disabled = false;
+            btn.textContent = 'Синхронизировать отчёт';
+        }
+
+        async function pollReportStatus() {
+            const statusEl = document.getElementById('reportStatus');
+
+            try {
+                const response = await fetch('/api/task-report/status');
+                const data = await response.json();
+                const run = (data && data.run) || {};
+                const table = (data && data.table) || {};
+
+                if (run.running) {
+                    statusEl.textContent =
+                        `Проекты ${run.projectsDone}/${run.projectsTotal} · задач ${run.tasksUpserted}`;
+                    setTimeout(pollReportStatus, 2000);
+                    return;
+                }
+
+                if (run.error) {
+                    addLog(`Синхронизация отчёта упала: ${run.error}`, 'error');
+                } else if (run.finishedAt) {
+                    addLog(
+                        `Готово: задач ${run.tasksUpserted}, проектов ${run.projectsDone}/${run.projectsTotal}` +
+                        (run.tasksSkippedByDepartment ? `, отсеяно чужих отделов ${run.tasksSkippedByDepartment}` : '') +
+                        `, удалено устаревших ${run.removedStale}`,
+                        'success'
+                    );
+                }
+
+                const rows = table.rows !== undefined ? table.rows : '—';
+                const last = table.lastSyncedAt ? new Date(table.lastSyncedAt).toLocaleString('ru-RU') : '—';
+                statusEl.textContent = `В таблице ${rows} строк · обновлено ${last}`;
+                finishReportRun();
+
+            } catch (error) {
+                addLog(`Не удалось получить статус: ${error.message}`, 'error');
+                finishReportRun();
+            }
+        }
+
+        async function startReportSync() {
+            if (isReportRunning) return;
+
+            const projectId = document.getElementById('reportProjectId').value.trim();
+            const btn = document.getElementById('reportSyncBtn');
+
+            isReportRunning = true;
+            btn.disabled = true;
+            btn.textContent = 'Синхронизация...';
+            document.getElementById('logs').innerHTML = '';
+            addLog(
+                `Отчёт по задачам: запуск (отдел задан в коде)` +
+                (projectId ? `, проект ${projectId}` : ''),
+                'info'
+            );
+
+            try {
+                // Отдел не передаём — он зафиксирован константой на сервере
+                const body = {};
+                if (projectId) body.project_id = projectId;
+
+                const response = await fetch('/api/task-report/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                const result = await response.json();
+                if (!result.success) throw new Error(result.error || 'Не удалось запустить');
+
+                addLog('Запущено в фоне — логи и прогресс обновляются автоматически', 'success');
+                setTimeout(pollReportStatus, 1000);
+
+            } catch (error) {
+                addLog(`Ошибка запуска: ${error.message}`, 'error');
+                finishReportRun();
+            }
+        }
+
         // Auto-refresh logs every 2 seconds during sync
         setInterval(async () => {
-            if (!isRunning) return;
+            if (!isRunning && !isReportRunning) return;
             
             try {
                 const response = await fetch('/api/logs');
