@@ -6,6 +6,7 @@ const syncManager = require('./sync/sync-manager');
 const logger = require('./utils/logger');
 const telegramBot = require('./services/telegram-bot');
 const scheduler = require('./services/scheduler');
+const taskReport = require('./task-report');
 
 class SyncApp {
   constructor() {
@@ -172,6 +173,9 @@ class SyncApp {
       });
     });
     
+    // Отчёт по задачам Worksection (автономный модуль, см. task-report/)
+    taskReport.registerRoutes(this.app);
+
     // Root endpoint
     this.app.get('/', (req, res) => {
       res.sendFile(path.join(__dirname, 'public', 'index.html'));
@@ -228,6 +232,9 @@ class SyncApp {
 
         // ✨ Инициализация планировщика автоматической синхронизации
         scheduler.initScheduler();
+
+        // Планировщик отчёта по задачам — отдельный, не пересекается с основным
+        taskReport.initScheduler();
       });
 
     } catch (error) {

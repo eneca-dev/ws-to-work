@@ -436,5 +436,8 @@ async function sendCsvFile(logs, stats, startTime, endTime) {
 module.exports = {
   sendSyncStarted,
   sendError,
-  sendCsvFile
+  sendCsvFile,
+  // Произвольное сообщение (HTML). Используется синхронизацией отчёта,
+  // которая отрабатывает уже после отправки основного отчёта в чат.
+  sendMessage
 };
