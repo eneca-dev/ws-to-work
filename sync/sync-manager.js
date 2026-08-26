@@ -3,6 +3,7 @@ const { syncProjects } = require('./project-sync');
 const { syncObjects, syncSections } = require('./content-sync');
 const { syncDecompositionStages, clearTagCache } = require('./stage-sync');
 const { syncCosts } = require('./costs-sync');
+const { syncVacations } = require('./vacation-sync');
 const telegram = require('../services/telegram');
 const supabaseService = require('../services/supabase');
 const worksectionService = require('../services/worksection');
@@ -37,6 +38,7 @@ class SyncManager {
       },
       work_logs: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       budgets: { updated: 0, errors: 0, total_increase: 0 },
+      vacations: { created: 0, unchanged: 0, deleted_stale: 0, skipped_no_profile: 0, skipped_not_production: 0, errors: 0 },
       orphan_work_logs: { total: 0, details: [] },
       failed_work_logs: { total: 0, details: [] },
       assignments: { attempted: 0, successful: 0, failed: 0 },
@@ -113,9 +115,23 @@ class SyncManager {
       await syncDecompositionStages(this.stats, offset, limit, projectId);
 
       // Step 5: Sync costs → work_logs
-      logger.info('💰 Step 5/5: Syncing costs (work_logs)');
+      logger.info('💰 Step 5/6: Syncing costs (work_logs)');
       await syncCosts(this.stats, offset, limit, projectId, costsMode, costsDate);
-      
+
+      // Step 6: Sync vacations → loadings (только при полной синхронизации, не привязано к конкретному проекту)
+      // syncVacations сама не бросает исключения, но оборачиваем повторно —
+      // сбой нового, ещё не обкатанного в проде шага не должен обрушивать
+      // остальную синхронизацию и подавлять отправку отчёта в Telegram.
+      if (!projectId) {
+        logger.info('🏖️ Step 6/6: Syncing vacations');
+        try {
+          await syncVacations(this.stats);
+        } catch (error) {
+          this.stats.vacations.errors++;
+          logger.error(`❌ Vacation sync step threw unexpectedly: ${error.message}`);
+        }
+      }
+
       const duration = Date.now() - startTime;
       const endTime = new Date();
       logger.success(`✅ Full synchronization completed in ${duration}ms`);
@@ -172,9 +188,14 @@ class SyncManager {
         budgetTotalIncrease: this.stats.budgets.total_increase,
         orphanWorkLogs: this.stats.orphan_work_logs.total,
         failedWorkLogs: this.stats.failed_work_logs.details,
+        vacationsCreated: this.stats.vacations.created,
+        vacationsUnchanged: this.stats.vacations.unchanged,
+        vacationsDeletedStale: this.stats.vacations.deleted_stale,
+        vacationsSkippedNoProfile: this.stats.vacations.skipped_no_profile,
+        vacationsSkippedNotProduction: this.stats.vacations.skipped_not_production,
         errors: this.stats.projects.errors + this.stats.objects.errors + this.stats.sections.errors +
                 this.stats.decomposition_stages.errors + this.stats.decomposition_items.errors +
-                this.stats.work_logs.errors + this.stats.budgets.errors,
+                this.stats.work_logs.errors + this.stats.budgets.errors + this.stats.vacations.errors,
         errorDetails: this.stats.error_details,
         // Добавляем информацию о дельте
         countBefore,
@@ -413,6 +434,15 @@ class SyncManager {
       `${this.stats.budgets.errors} errors`
     );
 
+    logger.info('🏖️ Vacations: ' +
+      `${this.stats.vacations.created} created, ` +
+      `${this.stats.vacations.unchanged} unchanged, ` +
+      `${this.stats.vacations.deleted_stale} stale deleted, ` +
+      `${this.stats.vacations.skipped_no_profile} no profile, ` +
+      `${this.stats.vacations.skipped_not_production} not production, ` +
+      `${this.stats.vacations.errors} errors`
+    );
+
     if (this.stats.orphan_work_logs.total > 0) {
       logger.warning(`⚠️ Orphan Work Logs: ${this.stats.orphan_work_logs.total} found (exist in Supabase but NOT in Worksection)`);
     }
@@ -470,6 +500,7 @@ class SyncManager {
       },
       work_logs: { created: 0, updated: 0, unchanged: 0, errors: 0, skipped: 0 },
       budgets: { updated: 0, errors: 0, total_increase: 0 },
+      vacations: { created: 0, unchanged: 0, deleted_stale: 0, skipped_no_profile: 0, skipped_not_production: 0, errors: 0 },
       orphan_work_logs: { total: 0, details: [] },
       failed_work_logs: { total: 0, details: [] },
       assignments: { attempted: 0, successful: 0, failed: 0 },
@@ -500,16 +531,19 @@ class SyncManager {
     const total = {
       created: this.stats.projects.created + this.stats.objects.created +
                this.stats.sections.created + this.stats.decomposition_stages.created +
-               this.stats.decomposition_items.created + this.stats.work_logs.created,
+               this.stats.decomposition_items.created + this.stats.work_logs.created +
+               this.stats.vacations.created,
       updated: this.stats.projects.updated + this.stats.objects.updated +
                this.stats.sections.updated + this.stats.decomposition_stages.updated +
                this.stats.decomposition_items.updated + this.stats.budgets.updated,
       unchanged: this.stats.projects.unchanged + this.stats.objects.unchanged +
                  this.stats.sections.unchanged + this.stats.decomposition_stages.unchanged +
-                 this.stats.decomposition_items.unchanged + this.stats.work_logs.unchanged,
+                 this.stats.decomposition_items.unchanged + this.stats.work_logs.unchanged +
+                 this.stats.vacations.unchanged,
       errors: this.stats.projects.errors + this.stats.objects.errors +
               this.stats.sections.errors + this.stats.decomposition_stages.errors +
-              this.stats.decomposition_items.errors + this.stats.work_logs.errors + this.stats.budgets.errors,
+              this.stats.decomposition_items.errors + this.stats.work_logs.errors + this.stats.budgets.errors +
+              this.stats.vacations.errors,
       skipped: (this.stats.projects.skipped || 0) + (this.stats.objects.skipped || 0) +
                (this.stats.sections.skipped || 0) + (this.stats.decomposition_stages.skipped || 0) +
                (this.stats.decomposition_items.skipped || 0) + (this.stats.work_logs.skipped || 0)
