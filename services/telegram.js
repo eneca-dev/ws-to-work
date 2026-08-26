@@ -67,6 +67,11 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   csv += `Budgets Updated,${stats.budgetsUpdated || 0}\n`;
   csv += `Budget Total Increase,${stats.budgetTotalIncrease ? stats.budgetTotalIncrease.toFixed(2) : '0.00'}\n`;
   csv += `Orphan Work Logs,${stats.orphanWorkLogs || 0}\n`;
+  csv += `Vacations Created,${stats.vacationsCreated || 0}\n`;
+  csv += `Vacations Unchanged,${stats.vacationsUnchanged || 0}\n`;
+  csv += `Vacations Stale Deleted,${stats.vacationsDeletedStale || 0}\n`;
+  csv += `Vacations Skipped (No Profile),${stats.vacationsSkippedNoProfile || 0}\n`;
+  csv += `Vacations Skipped (Not Production Dept),${stats.vacationsSkippedNotProduction || 0}\n`;
   csv += `Total Errors,${stats.errors || 0}\n`;
   csv += '\n';
 
@@ -190,9 +195,12 @@ function generateCsvContent(logs, stats, startTime, endTime) {
 
   csv += 'DETAILED LOGS\n';
 
-  // Ограничиваем количество логов: первые 10,000 + последние 10,000
-  const MAX_FIRST_LOGS = 10000;
-  const MAX_LAST_LOGS = 10000;
+  // Ограничиваем количество логов: первые 500 + последние 500.
+  // Полные логи и так почти никогда не читаются целиком — начало (что вообще
+  // стартовало) и конец (чем закончилось/какие ошибки) покрывают почти все
+  // разборы инцидентов, а файл остаётся маленьким и открывается мгновенно.
+  const MAX_FIRST_LOGS = 500;
+  const MAX_LAST_LOGS = 500;
   const MAX_TOTAL_LOGS = MAX_FIRST_LOGS + MAX_LAST_LOGS;
 
   let logsToInclude = [];
@@ -372,6 +380,17 @@ async function sendCsvFile(logs, stats, startTime, endTime) {
       caption += '\n';
     }
 
+    // Секция отпусков
+    if (stats.vacationsCreated || stats.vacationsDeletedStale || stats.vacationsSkippedNotProduction) {
+      caption += `<b>Отпуска:</b>\n` +
+        `🏖️ Создано: ${stats.vacationsCreated || 0}, без изменений: ${stats.vacationsUnchanged || 0}\n` +
+        `🗑️ Удалено протухших: ${stats.vacationsDeletedStale || 0}\n`;
+      if (stats.vacationsSkippedNoProfile || stats.vacationsSkippedNotProduction) {
+        caption += `🚫 Пропущено: ${stats.vacationsSkippedNoProfile || 0} без профиля, ${stats.vacationsSkippedNotProduction || 0} не из производственных отделов\n`;
+      }
+      caption += '\n';
+    }
+
     // Секция ошибок и предупреждений
     if (stats.errors > 0 || (stats.errorDetails && stats.errorDetails.warnings && stats.errorDetails.warnings.length > 0)) {
       caption += `<b>Ошибки и предупреждения:</b>\n`;
@@ -411,6 +430,17 @@ async function sendCsvFile(logs, stats, startTime, endTime) {
         `🔹 Этапы декомпозиции: ${stats.delta.decomposition_stages}\n` +
         `🔸 Задачи декомпозиции: ${stats.delta.decomposition_items}\n` +
         `🔢 Всего: ${stats.delta.total} записей`;
+    }
+
+    // Telegram обрезает/отклоняет caption документа длиннее 1024 символов —
+    // при большом количестве секций (ошибки + отпуска + дельта и т.д.) легко
+    // превысить лимит, и тогда sendDocument падает с 400 и отчёт не уходит
+    // вообще. Подстраховываемся: если не влезает — обрезаем caption, полная
+    // статистика в любом случае есть в самом CSV.
+    const TELEGRAM_CAPTION_LIMIT = 1024;
+    if (caption.length > TELEGRAM_CAPTION_LIMIT) {
+      const suffix = '\n\n📄 Полный отчёт — в приложенном CSV';
+      caption = caption.substring(0, TELEGRAM_CAPTION_LIMIT - suffix.length) + suffix;
     }
 
     // Отправляем в все чаты

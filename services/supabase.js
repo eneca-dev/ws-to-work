@@ -935,6 +935,137 @@ class SupabaseService {
   }
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // LOADINGS (VACATION SYNC)
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  /**
+   * Разделы «<Отдел> - Отпуск» под проектом "Отпуск" для отделов, входящих
+   * в подразделение "Производственные отделы". Строится динамически по имени
+   * раздела (`<department_name> - Отпуск`), а не хардкодом, чтобы новый отдел
+   * подхватывался сразу после создания ему раздела — без правки кода синка.
+   * @param {string} vacationProjectId
+   * @returns {Promise<Map<string, {departmentId: string, sectionId: string}>>} department_name → секция
+   */
+  async getVacationSectionsByDepartment(vacationProjectId) {
+    try {
+      const { data: subdivision, error: subErr } = await this.client
+        .from('subdivisions')
+        .select('subdivision_id')
+        .eq('subdivision_name', 'Производственные отделы')
+        .single();
+      if (subErr) throw subErr;
+
+      const { data: departments, error: depErr } = await this.client
+        .from('departments')
+        .select('department_id, department_name')
+        .eq('subdivision_id', subdivision.subdivision_id);
+      if (depErr) throw depErr;
+
+      const { data: sections, error: secErr } = await this.client
+        .from('sections')
+        .select('section_id, section_name')
+        .eq('section_project_id', vacationProjectId)
+        .ilike('section_name', '%- Отпуск');
+      if (secErr) throw secErr;
+
+      const sectionByName = new Map(
+        (sections || []).map((s) => [s.section_name.replace(/\s*-\s*Отпуск$/, '').trim(), s.section_id])
+      );
+
+      const map = new Map();
+      for (const dep of departments || []) {
+        const sectionId = sectionByName.get(dep.department_name);
+        if (sectionId) {
+          map.set(dep.department_name, { departmentId: dep.department_id, sectionId });
+        }
+      }
+      return map;
+    } catch (error) {
+      logger.error(`Error getting vacation sections by department: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Существующие загрузки-отпуска (external_source='worksection') конкретного
+  // сотрудника в разделе — нужны, чтобы вычислить и удалить "протухшие" строки
+  // (когда диапазон отпуска в WS изменился и старый external_id больше не встречается).
+  //
+  // ВАЖНО: ограничено окном [windowStart, windowEnd] по пересечению диапазона
+  // загрузки с окном синхронизации (loading_start <= windowEnd AND loading_finish
+  // >= windowStart). Без этого ограничения сотрудник с одним отпуском ДАВНО
+  // в прошлом (за пределами окна расписания WS) и ОДНИМ новым в этом прогоне
+  // получил бы удаление старой, уже прошедшей загрузки только потому, что она
+  // не встретилась в текущем ответе WS — а WS просто не отдаёт её, т.к. она вне
+  // запрошенного диапазона дат. Пересечение с окном гарантирует, что "протухшей"
+  // считается только то, что WS в принципе мог бы вернуть в этом прогоне.
+  async getWorksectionLoadingsForResponsible(sectionId, responsibleId, windowStart, windowEnd) {
+    try {
+      const { data, error } = await this.client
+        .from('loadings')
+        .select('loading_id, external_id, loading_start, loading_finish')
+        .eq('loading_section', sectionId)
+        .eq('loading_responsible', responsibleId)
+        .eq('external_source', 'worksection')
+        .lte('loading_start', windowEnd)
+        .gte('loading_finish', windowStart);
+
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      logger.error(`Error getting worksection loadings for responsible: ${error.message}`);
+      throw error;
+    }
+  }
+
+  async deleteLoadings(loadingIds) {
+    if (!loadingIds || loadingIds.length === 0) return;
+    try {
+      const { error } = await this.client
+        .from('loadings')
+        .delete()
+        .in('loading_id', loadingIds);
+      if (error) throw error;
+    } catch (error) {
+      logger.error(`Error deleting loadings: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Идемпотентный upsert загрузки-отпуска по ключу (раздел, источник, external_id)
+  async upsertLoadingByKey(sectionId, externalId, data) {
+    try {
+      const { data: existing, error: findErr } = await this.client
+        .from('loadings')
+        .select('*')
+        .eq('loading_section', sectionId)
+        .eq('external_source', 'worksection')
+        .eq('external_id', externalId)
+        .maybeSingle();
+      if (findErr) throw findErr;
+
+      if (existing) {
+        return { data: existing, wasCreated: false };
+      }
+
+      const { data: created, error: insErr } = await this.client
+        .from('loadings')
+        .insert({
+          ...data,
+          loading_section: sectionId,
+          external_source: 'worksection',
+          external_id: externalId
+        })
+        .select()
+        .single();
+      if (insErr) throw insErr;
+      return { data: created, wasCreated: true };
+    } catch (error) {
+      logger.error(`Error upserting loading: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // HELPER METHODS FOR CONSTANTS
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

@@ -227,6 +227,29 @@ class WorksectionService {
   }
 
   /**
+   * Расписание пользователей (отпуска/больничные) за период.
+   * Формат дат WS API — DD.MM.YYYY.
+   * @param {Date} dateStart
+   * @param {Date} dateEnd
+   * @returns {Promise<Object>} { <wsUserId>: { email, schedule: { 'YYYY-MM-DD': type } } }
+   */
+  async getUsersSchedule(dateStart, dateEnd) {
+    const data = await this.request('get_users_schedule', {
+      datestart: this.formatWsDate(dateStart),
+      dateend: this.formatWsDate(dateEnd)
+    });
+    return data.data || {};
+  }
+
+  // Форматирует дату в формат WS API: DD.MM.YYYY
+  formatWsDate(date) {
+    const dd = String(date.getDate()).padStart(2, '0');
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const yyyy = date.getFullYear();
+    return `${dd}.${mm}.${yyyy}`;
+  }
+
+  /**
    * Получить отчеты (costs) из Worksection
    * @param {string} projectId - ID проекта (опционально)
    * @param {string} taskId - ID задачи (опционально)
