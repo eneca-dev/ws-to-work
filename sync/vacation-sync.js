@@ -2,12 +2,23 @@ const logger = require('../utils/logger');
 const worksectionService = require('../services/worksection');
 const supabaseService = require('../services/supabase');
 
-// Проект "Отпуск" в eneca.work
+// Проект "Отпуск" в eneca.work (объекты "Отпуск" и "Больничный" внутри него)
 const VACATION_PROJECT_ID = '80bea5b8-1ecc-4ace-8d73-91f26e67b898';
 
-// Окно расписания: WS отдаёт план по дням, берём с запасом назад (уже начавшиеся
-// отпуска) и вперёд (запланированные заранее).
-const SCHEDULE_DAYS_BACK = 30;
+// Окно расписания: синхронизируем только с сегодняшнего дня и далее —
+// прошлое не трогаем и не досоздаём задним числом.
+//
+// Из-за этого у уже ИДУЩЕГО отпуска WS будет каждый раз показывать датой
+// начала "сегодня" (мы не спрашиваем про более ранние дни) — то есть при
+// пересчёте на следующий день получится другой диапазон/ключ, чем вчера.
+// Это не проблема: перед созданием новой загрузки synAbsenceType проверяет
+// getOverlappingLoadings — если период уже чем-то занят (хоть вчерашней
+// версией этого же отпуска, хоть ручной записью), новая просто не создаётся,
+// старая не трогается. Так что "плывущий" при пересчёте диапазон не образует
+// дублей — с первого раза, как отпуск попал в БД, дата начала в ней
+// фиксируется навсегда, даже если она с опозданием (не с истинного начала
+// отпуска, а с того дня, когда синк его впервые увидел).
+const SCHEDULE_DAYS_BACK = 0;
 const SCHEDULE_DAYS_FORWARD = 365;
 
 function addDays(date, days) {
@@ -42,11 +53,10 @@ function collapseDatesToRanges(sortedDates) {
   return ranges;
 }
 
-function emptyStats() {
+function emptyAbsenceStats() {
   return {
     created: 0,
     unchanged: 0,
-    deleted_stale: 0,
     skipped_no_profile: 0,
     skipped_not_production: 0,
     errors: 0
@@ -54,40 +64,154 @@ function emptyStats() {
 }
 
 /**
- * Синхронизирует отпуска из расписания Worksection в загрузки на разделах
- * "<Отдел> - Отпуск" проекта "Отпуск". Синхронизируются только сотрудники
- * отделов подразделения "Производственные отделы" — остальные пропускаются.
+ * Синхронизирует один тип отсутствия (WS-тип 'vacation' или 'sick-leave') из
+ * уже загруженного расписания в загрузки на разделах "<Отдел> - <тип>".
  *
- * Идемпотентность: каждая загрузка получает external_id вида
- * "vacation:<email>:<start>:<finish>" и апсертится по (loading_section,
- * external_source, external_id). Если диапазон отпуска в WS сдвинулся —
- * старая загрузка с прежним external_id для этого сотрудника удаляется, но
- * только среди external_source='worksection' и только в пределах окна
- * синхронизации (см. комментарий в getWorksectionLoadingsForResponsible) —
- * ручные загрузки и уже прошедшие вне окна отпуска никогда не трогаются.
+ * Сверка ПОСУТОЧНАЯ, не по целому диапазону: для каждого сотрудника берём
+ * все дни, которые WS считает отсутствием, вычитаем дни, уже покрытые ЛЮБОЙ
+ * существующей загрузкой (ручной или из WS, неважно с каким ключом) —
+ * загрузка создаётся только на оставшиеся ("недостающие") дни, склеенные в
+ * диапазоны. Так продления в WS подхватываются сами (недостающий хвост
+ * станет отдельной новой загрузкой), а уже внесённое НИКОГДА не
+ * перезаписывается и не дублируется — существующие записи не трогаются
+ * вообще, только читаются для вычисления покрытия.
+ *
+ * Если отпуск/больничный в WS отменили, сдвинули или сократили — старая
+ * загрузка в eneca.work так и останется как есть, синк её не тронет. Так
+ * решили сознательно: у get_users_schedule нет понятия "явное удаление"
+ * (это снимок дней на момент запроса, а не журнал событий), поэтому
+ * надёжно отличить "запись реально отменили" от "мы просто иначе её
+ * увидели" невозможно — расхождения разбираются руками по запросу.
+ */
+async function syncAbsenceType({
+  absenceStats, wsType, externalPrefix, logEmoji, logName,
+  schedule, profileByEmail, sectionsByDepartment, departmentNameById
+}) {
+  const datesByEmail = new Map();
+  for (const userData of Object.values(schedule)) {
+    const email = userData.email ? userData.email.toLowerCase().trim() : null;
+    if (!email || !userData.schedule) continue;
+
+    const dates = Object.entries(userData.schedule)
+      .filter(([, type]) => type === wsType)
+      .map(([date]) => date)
+      .sort();
+    if (dates.length > 0) datesByEmail.set(email, dates);
+  }
+  logger.info(`${logEmoji} WS schedule: ${datesByEmail.size} employees have "${logName}" days in this window`);
+
+  for (const [email, dates] of datesByEmail) {
+    const profile = profileByEmail.get(email);
+    if (!profile) {
+      absenceStats.skipped_no_profile++;
+      logger.warning(`⚠️ ${logName}: no eneca.work profile for ${email}, skipping`);
+      continue;
+    }
+
+    const departmentName = departmentNameById.get(profile.department_id);
+    if (!departmentName) {
+      absenceStats.skipped_not_production++;
+      continue;
+    }
+
+    const sectionInfo = sectionsByDepartment.get(departmentName);
+    if (!sectionInfo) continue;
+    const { sectionId } = sectionInfo;
+
+    // Дни, которые WS считает отсутствием, но которые ещё НИЧЕМ не покрыты
+    // (ни ручной записью, ни другой WS-записью) — только на них создаём
+    // новые загрузки. Уже покрытые дни не трогаем, даже если диапазон в
+    // существующей записи не совпадает 1-в-1 с тем, что сейчас говорит WS —
+    // так продления в WS подхватываются (недостающий хвост станет отдельной
+    // новой загрузкой), а уже внесённое никогда не переписывается и не дублируется.
+    const windowStart = dates[0];
+    const windowEnd = dates[dates.length - 1];
+
+    let existing;
+    try {
+      existing = await supabaseService.getOverlappingLoadings(sectionId, profile.user_id, windowStart, windowEnd);
+    } catch (error) {
+      absenceStats.errors++;
+      logger.error(`❌ ${logName} coverage lookup failed for ${email}: ${error.message}`);
+      continue;
+    }
+
+    const coveredDays = new Set();
+    for (const row of existing) {
+      const from = row.loading_start > windowStart ? row.loading_start : windowStart;
+      const to = row.loading_finish < windowEnd ? row.loading_finish : windowEnd;
+      for (let d = from; d <= to; d = toIsoDate(addDays(new Date(d), 1))) {
+        coveredDays.add(d);
+      }
+    }
+
+    const gapDates = dates.filter((d) => !coveredDays.has(d));
+    if (gapDates.length === 0) {
+      absenceStats.unchanged++;
+      continue;
+    }
+
+    const gapRanges = collapseDatesToRanges(gapDates);
+    for (const range of gapRanges) {
+      const externalId = `${externalPrefix}:${email}:${range.start}:${range.finish}`;
+      try {
+        const { wasCreated } = await supabaseService.upsertLoadingByKey(sectionId, externalId, {
+          loading_start: range.start,
+          loading_finish: range.finish,
+          loading_responsible: profile.user_id,
+          loading_status: 'active',
+          loading_rate: 1,
+          is_shortage: false
+        });
+        if (wasCreated) {
+          absenceStats.created++;
+          logger.success(`${logEmoji} Created ${logName} loading (gap-filled): ${email} (${departmentName}) ${range.start}..${range.finish}`);
+        } else {
+          absenceStats.unchanged++;
+        }
+      } catch (error) {
+        absenceStats.errors++;
+        logger.error(`❌ ${logName} upsert failed for ${email} ${range.start}..${range.finish}: ${error.message}`);
+      }
+    }
+  }
+
+  logger.info(
+    `${logEmoji} ${logName}: skipped ${absenceStats.skipped_no_profile} no profile, ` +
+    `${absenceStats.skipped_not_production} not production department`
+  );
+}
+
+/**
+ * Синхронизирует отпуска (WS: 'vacation' → раздел "<Отдел> - Отпуск") и
+ * больничные по общему графику (WS: 'sick-leave' → "<Отдел> - Больничный")
+ * из одного и того же расписания Worksection — за один запрос к API.
  *
  * Никогда не бросает исключение наружу: любая непредвиденная ошибка (сбой WS
- * API, недоступность Supabase и т.п.) ловится, пишется в stats.vacations.errors
- * и в лог, чтобы поломка этого шага не обрушивала весь fullSync и не мешала
- * остальным шагам синхронизации/отчёту в Telegram.
+ * API, недоступность Supabase и т.п.) ловится, пишется в stats.*.errors и в
+ * лог, чтобы поломка этого шага не обрушивала весь fullSync.
  */
 async function syncVacations(stats) {
-  stats.vacations = emptyStats();
+  stats.vacations = emptyAbsenceStats();
+  stats.sick_leave = emptyAbsenceStats();
 
   try {
-    logger.info('🏖️ Syncing vacations from Worksection schedule');
+    logger.info('🏖️ Syncing vacations and sick leave from Worksection schedule');
 
-    const departmentSections = await supabaseService.getVacationSectionsByDepartment(VACATION_PROJECT_ID);
-    if (departmentSections.size === 0) {
-      logger.warning('⚠️ No vacation sections found for production departments — skipping vacation sync');
+    const [vacationSections, sickLeaveSections] = await Promise.all([
+      supabaseService.getDepartmentSectionsBySuffix(VACATION_PROJECT_ID, 'Отпуск'),
+      supabaseService.getDepartmentSectionsBySuffix(VACATION_PROJECT_ID, 'Больничный')
+    ]);
+
+    if (vacationSections.size === 0 && sickLeaveSections.size === 0) {
+      logger.warning('⚠️ No vacation/sick-leave sections found for production departments — skipping');
       return stats.vacations;
     }
-    logger.info(`🏖️ Resolved ${departmentSections.size} production department vacation sections: ${Array.from(departmentSections.keys()).join(', ')}`);
+    logger.info(`🏖️ Resolved ${vacationSections.size} "Отпуск" and ${sickLeaveSections.size} "Больничный" department sections`);
 
     const departmentNameById = new Map();
-    for (const [name, info] of departmentSections) {
-      departmentNameById.set(info.departmentId, name);
-    }
+    for (const [name, info] of vacationSections) departmentNameById.set(info.departmentId, name);
+    for (const [name, info] of sickLeaveSections) departmentNameById.set(info.departmentId, name);
 
     const profiles = await supabaseService.getUsers();
     const profileByEmail = new Map(
@@ -103,107 +227,45 @@ async function syncVacations(stats) {
 
     const schedule = await worksectionService.getUsersSchedule(dateStart, dateEnd);
 
-    // email → отсортированный список дат типа 'vacation'
-    const vacationDatesByEmail = new Map();
-    for (const userData of Object.values(schedule)) {
-      const email = userData.email ? userData.email.toLowerCase().trim() : null;
-      if (!email || !userData.schedule) continue;
-
-      const dates = Object.entries(userData.schedule)
-        .filter(([, type]) => type === 'vacation')
-        .map(([date]) => date)
-        .sort();
-      if (dates.length > 0) vacationDatesByEmail.set(email, dates);
-    }
-    logger.info(`🏖️ WS schedule: ${vacationDatesByEmail.size} employees have vacation days in this window`);
-
-    // section_id → (responsible_id → Set актуальных на этот прогон external_id)
-    const touchedByResponsibleInSection = new Map();
-
-    for (const [email, dates] of vacationDatesByEmail) {
-      const profile = profileByEmail.get(email);
-      if (!profile) {
-        stats.vacations.skipped_no_profile++;
-        logger.warning(`⚠️ Vacation: no eneca.work profile for ${email}, skipping`);
-        continue;
-      }
-
-      const departmentName = departmentNameById.get(profile.department_id);
-      if (!departmentName) {
-        stats.vacations.skipped_not_production++;
-        continue;
-      }
-
-      const { sectionId } = departmentSections.get(departmentName);
-      const ranges = collapseDatesToRanges(dates);
-
-      if (!touchedByResponsibleInSection.has(sectionId)) {
-        touchedByResponsibleInSection.set(sectionId, new Map());
-      }
-      const touchedByResponsible = touchedByResponsibleInSection.get(sectionId);
-      const currentExternalIds = new Set();
-      touchedByResponsible.set(profile.user_id, currentExternalIds);
-
-      for (const range of ranges) {
-        const externalId = `vacation:${email}:${range.start}:${range.finish}`;
-        currentExternalIds.add(externalId);
-
-        try {
-          const { wasCreated } = await supabaseService.upsertLoadingByKey(sectionId, externalId, {
-            loading_start: range.start,
-            loading_finish: range.finish,
-            loading_responsible: profile.user_id,
-            loading_status: 'active',
-            loading_rate: 1,
-            is_shortage: false
-          });
-          if (wasCreated) {
-            stats.vacations.created++;
-            logger.success(`✅ Created vacation loading: ${email} (${departmentName}) ${range.start}..${range.finish}`);
-          } else {
-            stats.vacations.unchanged++;
-          }
-        } catch (error) {
-          stats.vacations.errors++;
-          logger.error(`❌ Vacation upsert failed for ${email} ${range.start}..${range.finish}: ${error.message}`);
-        }
-      }
+    if (vacationSections.size > 0) {
+      await syncAbsenceType({
+        absenceStats: stats.vacations,
+        wsType: 'vacation',
+        externalPrefix: 'vacation',
+        logEmoji: '🏖️',
+        logName: 'vacation',
+        schedule,
+        profileByEmail,
+        sectionsByDepartment: vacationSections,
+        departmentNameById
+      });
     }
 
-    logger.info(`🏖️ Skipped: ${stats.vacations.skipped_no_profile} no profile, ${stats.vacations.skipped_not_production} not production department`);
-
-    // Удаляем протухшие загрузки: были синхронизированы Worksection ранее, но в
-    // этом прогоне у сотрудника такого диапазона уже нет (сдвинули/сократили/удалили в WS).
-    // Сравнение ограничено окном синхронизации — прошедшие вне окна отпуска не трогаем.
-    for (const [sectionId, touchedByResponsible] of touchedByResponsibleInSection) {
-      for (const [responsibleId, currentExternalIds] of touchedByResponsible) {
-        try {
-          const existing = await supabaseService.getWorksectionLoadingsForResponsible(
-            sectionId, responsibleId, dateStartIso, dateEndIso
-          );
-          const stale = existing.filter((row) => !currentExternalIds.has(row.external_id));
-          if (stale.length > 0) {
-            await supabaseService.deleteLoadings(stale.map((row) => row.loading_id));
-            stats.vacations.deleted_stale += stale.length;
-            stale.forEach((row) => {
-              logger.info(`🗑️ Removed stale vacation loading: ${row.loading_start}..${row.loading_finish} (no longer in WS schedule)`);
-            });
-          }
-        } catch (error) {
-          stats.vacations.errors++;
-          logger.error(`❌ Stale vacation cleanup failed: ${error.message}`);
-        }
-      }
+    if (sickLeaveSections.size > 0) {
+      await syncAbsenceType({
+        absenceStats: stats.sick_leave,
+        wsType: 'sick-leave',
+        externalPrefix: 'sick_leave',
+        logEmoji: '🤒',
+        logName: 'sick leave',
+        schedule,
+        profileByEmail,
+        sectionsByDepartment: sickLeaveSections,
+        departmentNameById
+      });
     }
 
     logger.success(
       `✅ Vacations synced: ${stats.vacations.created} created, ${stats.vacations.unchanged} unchanged, ` +
-      `${stats.vacations.deleted_stale} stale deleted, ${stats.vacations.skipped_no_profile} no profile, ` +
-      `${stats.vacations.skipped_not_production} not production, ${stats.vacations.errors} errors`
+      `${stats.vacations.errors} errors`
+    );
+    logger.success(
+      `✅ Sick leave synced: ${stats.sick_leave.created} created, ${stats.sick_leave.unchanged} unchanged, ` +
+      `${stats.sick_leave.errors} errors`
     );
   } catch (error) {
     stats.vacations.errors++;
-    logger.error(`❌ Vacation sync step failed entirely: ${error.message}`);
+    logger.error(`❌ Vacation/sick-leave sync step failed entirely: ${error.message}`);
   }
 
   return stats.vacations;

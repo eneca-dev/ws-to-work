@@ -241,6 +241,21 @@ class WorksectionService {
     return data.data || {};
   }
 
+  /**
+   * События по проекту за период (используется для sick-day: подзадачи
+   * создаются/обновляются/удаляются под конкретной родительской задачей).
+   * @param {string} projectId
+   * @param {string} period - например '8d' (8 дней назад)
+   * @returns {Promise<Array>}
+   */
+  async getEvents(projectId, period) {
+    const data = await this.request('get_events', {
+      id_project: projectId,
+      period
+    });
+    return data.data || [];
+  }
+
   // Форматирует дату в формат WS API: DD.MM.YYYY
   formatWsDate(date) {
     const dd = String(date.getDate()).padStart(2, '0');

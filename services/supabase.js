@@ -939,14 +939,15 @@ class SupabaseService {
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   /**
-   * Разделы «<Отдел> - Отпуск» под проектом "Отпуск" для отделов, входящих
-   * в подразделение "Производственные отделы". Строится динамически по имени
-   * раздела (`<department_name> - Отпуск`), а не хардкодом, чтобы новый отдел
-   * подхватывался сразу после создания ему раздела — без правки кода синка.
-   * @param {string} vacationProjectId
+   * Разделы «<Отдел> - <suffix>» (например "Отпуск" или "Больничный") под
+   * указанным проектом для отделов, входящих в подразделение "Производственные
+   * отделы". Строится динамически по имени раздела, а не хардкодом, чтобы новый
+   * отдел подхватывался сразу после создания ему раздела — без правки кода синка.
+   * @param {string} projectId
+   * @param {string} suffix - название объекта после "<Отдел> - ", например "Отпуск"
    * @returns {Promise<Map<string, {departmentId: string, sectionId: string}>>} department_name → секция
    */
-  async getVacationSectionsByDepartment(vacationProjectId) {
+  async getDepartmentSectionsBySuffix(projectId, suffix) {
     try {
       const { data: subdivision, error: subErr } = await this.client
         .from('subdivisions')
@@ -964,12 +965,13 @@ class SupabaseService {
       const { data: sections, error: secErr } = await this.client
         .from('sections')
         .select('section_id, section_name')
-        .eq('section_project_id', vacationProjectId)
-        .ilike('section_name', '%- Отпуск');
+        .eq('section_project_id', projectId)
+        .ilike('section_name', `%- ${suffix}`);
       if (secErr) throw secErr;
 
+      const suffixPattern = new RegExp(`\\s*-\\s*${suffix}$`);
       const sectionByName = new Map(
-        (sections || []).map((s) => [s.section_name.replace(/\s*-\s*Отпуск$/, '').trim(), s.section_id])
+        (sections || []).map((s) => [s.section_name.replace(suffixPattern, '').trim(), s.section_id])
       );
 
       const map = new Map();
@@ -981,9 +983,14 @@ class SupabaseService {
       }
       return map;
     } catch (error) {
-      logger.error(`Error getting vacation sections by department: ${error.message}`);
+      logger.error(`Error getting "${suffix}" sections by department: ${error.message}`);
       throw error;
     }
+  }
+
+  // Обратная совместимость: старое имя метода для разделов "Отпуск"
+  async getVacationSectionsByDepartment(vacationProjectId) {
+    return this.getDepartmentSectionsBySuffix(vacationProjectId, 'Отпуск');
   }
 
   // Существующие загрузки-отпуска (external_source='worksection') конкретного
@@ -1061,6 +1068,100 @@ class SupabaseService {
       return { data: created, wasCreated: true };
     } catch (error) {
       logger.error(`Error upserting loading: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Любые загрузки (любого источника — ручные и WS) этого сотрудника в этом
+  // разделе, пересекающиеся с [start, finish]. Используется перед созданием
+  // новой WS-загрузки: если период уже чем-то занят (ручной записью или
+  // другой WS-записью с иным ключом — например, из-за сдвига окна синка или
+  // просто более старого прогона) — новую не создаём и вообще не трогаем
+  // ничего существующего, только пропускаем. Это единственная защита от
+  // дублей — синк намеренно ничего не удаляет и не обновляет чужие записи.
+  async getOverlappingLoadings(sectionId, responsibleId, start, finish) {
+    try {
+      const { data, error } = await this.client
+        .from('loadings')
+        .select('loading_id, external_id, external_source, loading_start, loading_finish')
+        .eq('loading_section', sectionId)
+        .eq('loading_responsible', responsibleId)
+        .lte('loading_start', finish)
+        .gte('loading_finish', start);
+      if (error) throw error;
+      return data || [];
+    } catch (error) {
+      logger.error(`Error getting overlapping loadings: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Найти загрузку по external_id без привязки к разделу заранее — нужно для
+  // sick_day, где ключ (external_id = "sick_day:<ws_task_id>") стабилен и не
+  // зависит от дат, поэтому раздел для delete-события неизвестен без поиска.
+  async getLoadingByExternalId(externalId) {
+    try {
+      const { data, error } = await this.client
+        .from('loadings')
+        .select('loading_id, loading_section, loading_start, loading_finish, loading_responsible')
+        .eq('external_source', 'worksection')
+        .eq('external_id', externalId)
+        .maybeSingle();
+      if (error) throw error;
+      return data || null;
+    } catch (error) {
+      logger.error(`Error getting loading by external_id: ${error.message}`);
+      throw error;
+    }
+  }
+
+  // Как upsertLoadingByKey, но для источников со стабильным (не зависящим от
+  // дат) external_id — sick_day ключуется по ws_task_id, поэтому при сдвиге
+  // дат в WS (событие update) существующая строка находится по тому же
+  // external_id и должна ОБНОВИТЬСЯ, а не остаться в устаревших датах.
+  async upsertOrUpdateLoadingByKey(sectionId, externalId, data) {
+    try {
+      const { data: existing, error: findErr } = await this.client
+        .from('loadings')
+        .select('*')
+        .eq('loading_section', sectionId)
+        .eq('external_source', 'worksection')
+        .eq('external_id', externalId)
+        .maybeSingle();
+      if (findErr) throw findErr;
+
+      if (existing) {
+        const changed =
+          existing.loading_start !== data.loading_start ||
+          existing.loading_finish !== data.loading_finish ||
+          existing.loading_responsible !== data.loading_responsible;
+        if (!changed) {
+          return { data: existing, wasCreated: false, wasUpdated: false };
+        }
+        const { data: updated, error: updErr } = await this.client
+          .from('loadings')
+          .update(data)
+          .eq('loading_id', existing.loading_id)
+          .select()
+          .single();
+        if (updErr) throw updErr;
+        return { data: updated, wasCreated: false, wasUpdated: true };
+      }
+
+      const { data: created, error: insErr } = await this.client
+        .from('loadings')
+        .insert({
+          ...data,
+          loading_section: sectionId,
+          external_source: 'worksection',
+          external_id: externalId
+        })
+        .select()
+        .single();
+      if (insErr) throw insErr;
+      return { data: created, wasCreated: true, wasUpdated: false };
+    } catch (error) {
+      logger.error(`Error upserting/updating loading: ${error.message}`);
       throw error;
     }
   }
