@@ -69,9 +69,14 @@ function generateCsvContent(logs, stats, startTime, endTime) {
   csv += `Orphan Work Logs,${stats.orphanWorkLogs || 0}\n`;
   csv += `Vacations Created,${stats.vacationsCreated || 0}\n`;
   csv += `Vacations Unchanged,${stats.vacationsUnchanged || 0}\n`;
-  csv += `Vacations Stale Deleted,${stats.vacationsDeletedStale || 0}\n`;
   csv += `Vacations Skipped (No Profile),${stats.vacationsSkippedNoProfile || 0}\n`;
   csv += `Vacations Skipped (Not Production Dept),${stats.vacationsSkippedNotProduction || 0}\n`;
+  csv += `Sick Leave Created,${stats.sickLeaveCreated || 0}\n`;
+  csv += `Sick Leave Errors,${stats.sickLeaveErrors || 0}\n`;
+  csv += `Sick Days Created,${stats.sickDayCreated || 0}\n`;
+  csv += `Sick Days Updated,${stats.sickDayUpdated || 0}\n`;
+  csv += `Sick Days Deleted,${stats.sickDayDeleted || 0}\n`;
+  csv += `Sick Days Errors,${stats.sickDayErrors || 0}\n`;
   csv += `Total Errors,${stats.errors || 0}\n`;
   csv += '\n';
 
@@ -381,14 +386,20 @@ async function sendCsvFile(logs, stats, startTime, endTime) {
     }
 
     // Секция отпусков
-    if (stats.vacationsCreated || stats.vacationsDeletedStale || stats.vacationsSkippedNotProduction) {
+    if (stats.vacationsCreated || stats.vacationsSkippedNotProduction) {
       caption += `<b>Отпуска:</b>\n` +
-        `🏖️ Создано: ${stats.vacationsCreated || 0}, без изменений: ${stats.vacationsUnchanged || 0}\n` +
-        `🗑️ Удалено протухших: ${stats.vacationsDeletedStale || 0}\n`;
+        `🏖️ Создано: ${stats.vacationsCreated || 0}, без изменений: ${stats.vacationsUnchanged || 0}\n`;
       if (stats.vacationsSkippedNoProfile || stats.vacationsSkippedNotProduction) {
         caption += `🚫 Пропущено: ${stats.vacationsSkippedNoProfile || 0} без профиля, ${stats.vacationsSkippedNotProduction || 0} не из производственных отделов\n`;
       }
       caption += '\n';
+    }
+
+    // Секция больничных/сикдеев — кратко: сколько синхронизировано, есть ли ошибки
+    if (stats.sickLeaveCreated || stats.sickDayCreated || stats.sickDayUpdated || stats.sickLeaveErrors || stats.sickDayErrors) {
+      caption += `<b>Больничные:</b>\n` +
+        `🤒 По графику: ${stats.sickLeaveCreated || 0} создано${stats.sickLeaveErrors ? `, ⚠️ ${stats.sickLeaveErrors} ошибок` : ''}\n` +
+        `🩹 Сикдеи: ${stats.sickDayCreated || 0} создано, ${stats.sickDayUpdated || 0} обновлено${stats.sickDayErrors ? `, ⚠️ ${stats.sickDayErrors} ошибок` : ''}\n\n`;
     }
 
     // Секция ошибок и предупреждений
